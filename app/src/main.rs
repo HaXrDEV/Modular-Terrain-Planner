@@ -94,6 +94,12 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+fn window_icon() -> Option<egui::IconData> {
+    let png = include_bytes!("../../assets/icons/icon-256.png");
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.to_rgba8();
+    Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
+}
+
 fn run(paths: Paths, settings: Settings, startup: app::Startup) -> Result<(), String> {
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     if let Some(choice) = settings.backend.env_value() {
@@ -101,8 +107,12 @@ fn run(paths: Paths, settings: Settings, startup: app::Startup) -> Result<(), St
     }
     let wgpu_options =
         egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup), ..Default::default() };
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_title(APP_NAME)
             .with_app_id("modular-terrain-planner")
             .with_inner_size([1400.0, 860.0])

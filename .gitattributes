@@ -9,3 +9,5 @@
 *.Stl binary
 *.ttf binary
 *.png binary
+*.iss text eol=crlf
+AppRun text eol=lf

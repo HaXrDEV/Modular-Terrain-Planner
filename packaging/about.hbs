@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Modular Terrain Planner: third-party licences</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+h1 { font-size: 1.5rem; } h2 { font-size: 1.15rem; margin-top: 2rem; }
+pre { white-space: pre-wrap; background: #f4f4f6; padding: 1rem; border-radius: 6px; font-size: 13px; }
+li { margin: 0.1rem 0; }
+</style>
+</head>
+<body>
+<h1>Third-party licences</h1>
+<p>Modular Terrain Planner is MIT-licensed. It is built with these open-source crates. The build plan font,
+Cantarell, is under the SIL Open Font Licence 1.1 (see OFL.txt next to this file).</p>
+<h2>Overview</h2>
+<ul>
+{{#each overview}}<li>{{name}} ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p>Used by:</p>
+<ul>
+{{#each used_by}}<li>{{crate.name}} {{crate.version}}</li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>
