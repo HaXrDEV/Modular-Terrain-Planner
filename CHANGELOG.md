@@ -23,6 +23,8 @@ saving writes format version 5, which earlier versions can't open.
 - Variants: C and Shift+C cycle through tiles of the same size from the
   same pack, and Randomise variants mixes them into a selection so a
   floor doesn't repeat one tile.
+- Add walls around a selection of floor: straight pieces along every
+  outside edge, facing in, with corner pieces where edges meet.
 - Stamps: save a selection (a corridor, a room) under a name and paste
   it into any project.
 - Ctrl+K finds any command or tile by typing part of its name.

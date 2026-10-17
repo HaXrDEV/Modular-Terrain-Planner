@@ -368,6 +368,35 @@ impl Editor {
         }
     }
 
+    /// Puts walls (and corner pieces) round the selected tiles' cells, on
+    /// top of them, facing in. Returns how many edge stretches were too
+    /// short for a wall.
+    pub fn add_walls(&mut self, wall: (TileKey, TileSize), corner: Option<(TileKey, TileSize)>) -> usize {
+        use mtp_core::outline::{WallShape, walls_around};
+        let cells: std::collections::HashSet<(i32, i32)> =
+            self.selected_tiles().iter().flat_map(|t| t.cells().collect::<Vec<_>>()).collect();
+        let (key, size) = wall;
+        let shape = if size.w >= size.h { WallShape::AlongX } else { WallShape::AlongY };
+        let plan = walls_around(&cells, size.w.max(size.h), shape, corner.is_some());
+        let level = self.level;
+        let proposal = |key: &TileKey, size: TileSize, p: &mtp_core::outline::Piece| Proposal {
+            key: key.clone(),
+            size,
+            size_known: true,
+            x: p.x,
+            y: p.y,
+            z: 0.0,
+            rotation: p.rotation,
+            level,
+        };
+        let mut proposals: Vec<Proposal> = plan.walls.iter().map(|p| proposal(&key, size, p)).collect();
+        if let Some((ck, cs)) = &corner {
+            proposals.extend(plan.corners.iter().map(|p| proposal(ck, *cs, p)));
+        }
+        self.fill(proposals, Mode::Snap);
+        plan.gaps
+    }
+
     /// Switches the level being edited; the selection stays on its level.
     pub fn set_level(&mut self, level: i32) {
         if level != self.level {
@@ -523,6 +552,35 @@ mod tests {
         e.undo();
         assert_eq!(e.doc.tiles().len(), 1, "a fill is one undo step");
         assert_eq!(e.recent.len(), 1);
+    }
+
+    #[test]
+    fn walls_go_round_a_room_on_top_of_the_floor() {
+        let mut e = Editor::empty(GridSize { cols: 30, rows: 30 });
+        let floor = |x: f32, y: f32| Proposal {
+            key: TileKey::new("C:/t/floor.stl"),
+            size: TileSize { w: 2, h: 2, gz: 0.5 },
+            size_known: true,
+            x,
+            y,
+            z: 0.0,
+            rotation: Rotation::ZERO,
+            level: 0,
+        };
+        let floors: Vec<Proposal> =
+            (0..3).flat_map(|i| (0..2).map(move |j| floor(2.0 * i as f32, 2.0 * j as f32))).collect();
+        e.place(floors, Mode::Snap).expect("floor");
+        e.select_all();
+        let wall = (TileKey::new("C:/t/wall.stl"), TileSize { w: 2, h: 1, gz: 4.0 });
+        let corner = (TileKey::new("C:/t/pillar.stl"), TileSize { w: 1, h: 1, gz: 4.5 });
+        let gaps = e.add_walls(wall, Some(corner));
+        assert_eq!(gaps, 0);
+        let walls: Vec<_> = e.doc.tiles().iter().filter(|t| t.key.stem() == "wall").collect();
+        let pillars: Vec<_> = e.doc.tiles().iter().filter(|t| t.key.stem() == "pillar").collect();
+        assert_eq!((walls.len(), pillars.len()), (6, 4));
+        assert!(walls.iter().chain(&pillars).all(|t| t.z == 0.5), "everything stands on the floor");
+        e.undo();
+        assert_eq!(e.doc.tiles().len(), 6, "one undo step");
     }
 
     #[test]

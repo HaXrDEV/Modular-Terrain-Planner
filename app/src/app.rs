@@ -62,6 +62,10 @@ enum Dialog {
     SaveStamp {
         name: String,
     },
+    Walls {
+        wall: Option<TileKey>,
+        corner: Option<TileKey>,
+    },
     Recovery(Vec<Autosave>),
     Crash(String),
     Message {
@@ -495,6 +499,19 @@ impl App {
             }
             Command::Delete => self.editor.delete_selection(),
             Command::SelectAll => self.editor.select_all(),
+            Command::AddWalls => {
+                if self.editor.selection.is_empty() {
+                    self.editor.warn("Select the floor to put walls round first.");
+                } else {
+                    let wall = self
+                        .library
+                        .tiles()
+                        .filter(|t| t.size.w.min(t.size.h) == 1 && t.size.w.max(t.size.h) > 1)
+                        .map(|t| t.key.clone())
+                        .min_by_key(|k| k.stem().to_lowercase());
+                    self.dialog = Some(Dialog::Walls { wall, corner: None });
+                }
+            }
             Command::SaveStamp => {
                 if self.editor.selection.is_empty() {
                     self.editor.warn("Select the tiles to save as a stamp first.");
@@ -911,6 +928,7 @@ impl App {
                 item(ui, Command::SelectAll, true, &mut chosen);
                 item(ui, Command::SelectSame, sel, &mut chosen);
                 item(ui, Command::SaveStamp, sel, &mut chosen);
+                item(ui, Command::AddWalls, sel, &mut chosen);
                 item(ui, Command::RandomiseVariants, sel, &mut chosen);
                 ui.separator();
                 item(ui, Command::TurnLeft, true, &mut chosen);
@@ -1274,6 +1292,79 @@ impl App {
                     });
                 });
                 Dialog::SaveStamp { name }
+            }
+            Dialog::Walls { mut wall, mut corner } => {
+                let mut walls: Vec<(TileKey, String)> = self
+                    .library
+                    .tiles()
+                    .filter(|t| t.size.w.min(t.size.h) == 1)
+                    .map(|t| (t.key.clone(), format!("{} ({}×{})", t.name, t.size.w, t.size.h)))
+                    .collect();
+                walls.sort_by_key(|(_, n)| n.to_lowercase());
+                let corners: Vec<(TileKey, String)> = walls
+                    .iter()
+                    .filter(|(k, _)| self.library.tile(k).is_some_and(|t| t.size.w == 1 && t.size.h == 1))
+                    .cloned()
+                    .collect();
+                let name_of = |k: &Option<TileKey>, list: &[(TileKey, String)], none: &str| {
+                    k.as_ref()
+                        .and_then(|k| list.iter().find(|(x, _)| x == k))
+                        .map_or(none.to_owned(), |(_, n)| n.clone())
+                };
+                egui::Modal::new(egui::Id::new("walls")).show(ctx, |ui| {
+                    ui.heading("Add walls around the selection");
+                    ui.label("Walls go on the outer cells of the selected tiles, facing in.");
+                    egui::Grid::new("walls grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Wall");
+                        egui::ComboBox::from_id_salt("wall").selected_text(name_of(&wall, &walls, "Choose…")).show_ui(
+                            ui,
+                            |ui| {
+                                for (k, n) in &walls {
+                                    ui.selectable_value(&mut wall, Some(k.clone()), n);
+                                }
+                            },
+                        );
+                        ui.end_row();
+                        ui.label("Corners");
+                        egui::ComboBox::from_id_salt("corner")
+                            .selected_text(name_of(&corner, &corners, "None"))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut corner, None, "None");
+                                for (k, n) in &corners {
+                                    ui.selectable_value(&mut corner, Some(k.clone()), n);
+                                }
+                            });
+                        ui.end_row();
+                    });
+                    if walls.is_empty() {
+                        ui.label(
+                            RichText::new("No wall tiles (1 cell thick) in the library.")
+                                .color(ui.visuals().warn_fg_color),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(wall.is_some(), egui::Button::new("Add walls")).clicked() {
+                            let (w, c) = (wall.clone(), corner.clone());
+                            then = Some(Box::new(move |app: &mut Self| {
+                                let tile = |k: &TileKey| app.library.tile(k).map(|t| (t.key.clone(), t.size));
+                                let (Some(w), c) = (w.as_ref().and_then(tile), c.as_ref().and_then(tile)) else {
+                                    return;
+                                };
+                                let gaps = app.editor.add_walls(w, c);
+                                if gaps > 0 {
+                                    app.editor.tell(format!(
+                                        "{gaps} stretches were too short for the wall and were left open."
+                                    ));
+                                }
+                            }));
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                Dialog::Walls { wall, corner }
             }
             Dialog::Message { title, text } => {
                 egui::Modal::new(egui::Id::new("message")).show(ctx, |ui| {
