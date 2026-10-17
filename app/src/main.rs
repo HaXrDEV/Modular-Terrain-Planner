@@ -7,6 +7,7 @@ mod diagnostics;
 mod editor;
 mod exports;
 mod files;
+mod instance;
 mod library;
 mod panels;
 mod samples;
@@ -81,7 +82,19 @@ fn main() -> std::process::ExitCode {
         }
     }
     let screenshot = args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-    let startup = app::Startup { open, problems: settings_problem.into_iter().collect(), crash_report, screenshot };
+    let mut incoming = None;
+    if screenshot.is_none() {
+        match instance::claim(&paths.config, &open) {
+            instance::Claim::Forwarded => {
+                tracing::info!("handed {} file(s) to the open window", open.len());
+                return std::process::ExitCode::SUCCESS;
+            }
+            instance::Claim::First(i) => incoming = Some(i),
+            instance::Claim::Alone => {}
+        }
+    }
+    let startup =
+        app::Startup { open, problems: settings_problem.into_iter().collect(), crash_report, screenshot, incoming };
 
     match run(paths, settings, startup) {
         Ok(()) => std::process::ExitCode::SUCCESS,

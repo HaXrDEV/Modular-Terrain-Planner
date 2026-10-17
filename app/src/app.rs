@@ -106,6 +106,7 @@ pub struct App {
     own_autosave: Option<PathBuf>,
     /// Files given at startup, opened once the recovery question is answered.
     deferred_open: Vec<PathBuf>,
+    incoming: Option<crossbeam_channel::Receiver<Vec<PathBuf>>>,
 }
 
 impl App {
@@ -169,6 +170,10 @@ impl App {
             own_autosave: None,
             image_shown: None,
             deferred_open: Vec::new(),
+            incoming: startup.incoming.as_ref().map(|i| {
+                let _ = i.ctx.set(cc.egui_ctx.clone());
+                i.rx.clone()
+            }),
             settings,
         };
         for dir in startup.open.iter().filter(|p| p.is_dir()) {
@@ -276,6 +281,7 @@ impl App {
     }
 
     fn finish_open(&mut self, pending: PendingOpen) {
+        tracing::info!("opening {}", pending.path.display());
         let state = files::finish_open(&pending);
         for w in &pending.file.warnings {
             self.problem(format!("{}: {w}", pending.path.display()));
@@ -409,7 +415,19 @@ impl App {
 
     fn handle_drops(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
-        for path in dropped {
+        self.open_paths(dropped);
+        let sent: Vec<Vec<PathBuf>> = self.incoming.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
+        for paths in sent {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.open_paths(paths);
+        }
+    }
+
+    /// Opens what was dropped or sent by another launch: folders and STL
+    /// files go to the library, projects open, images become the battle map.
+    fn open_paths(&mut self, paths: Vec<PathBuf>) {
+        for path in paths {
             let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             if path.is_dir() {
                 self.library.add_folder(&path, false);
@@ -1415,6 +1433,8 @@ pub struct Startup {
     /// `--screenshot <file>`: once the library has loaded, capture the window
     /// to a PNG and quit (for documentation and checking the UI in CI).
     pub screenshot: Option<PathBuf>,
+    /// Files sent by later launches.
+    pub incoming: Option<crate::instance::Incoming>,
 }
 
 pub fn open_in_file_manager(path: &Path) {

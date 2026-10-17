@@ -23,6 +23,8 @@ saving writes format version 5, which earlier versions can't open.
   list per STL file with a filament estimate and a table of every
   placement, on A4, A3, Letter, Legal or Tabloid.
 - Autosave and recovery after a crash, `.bak` copies, crash reports.
+- One window: opening a project from the file manager, or starting the
+  app again, hands it to the window already open.
 - Installers for Windows, macOS (universal) and Linux (AppImage and tar.gz).
 
 ### Fixed

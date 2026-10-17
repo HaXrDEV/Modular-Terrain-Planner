@@ -89,6 +89,15 @@ empty parts of a tile's box.
 the PNG draw, through one drawing routine, so they can't disagree. IDs follow
 reading order on the printed map. Print lists have one row per STL file.
 
+## One window
+
+The first instance listens on a local socket (a named pipe on Windows, an
+abstract socket on Linux, a socket file on macOS), named per user. A later
+launch connects, sends its file paths one per line and exits, and the open
+window opens them and comes to the front. Double-clicking a project on
+macOS reaches the app as an Apple event instead of a launch argument, which
+it doesn't handle yet.
+
 ## Tests
 
 - Golden files: `tools/golden.py` ran the Python version (tag `python-final`)
