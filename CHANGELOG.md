@@ -21,6 +21,9 @@ saving writes format version 5, which earlier versions can't open.
 - Levels for multi-storey dungeons: each is its own floor, the others are
   hidden, faded or stacked, and the build plan gives each its own map.
 - A red, hatched ghost and a reason when a tile can't go somewhere.
+- A Print List panel: how many of each STL the layout needs, how many you
+  own (remembered across projects) and what's left to print, with a
+  filament estimate in grams. Exports add Owned and To print columns.
 - Build plan PDF with a vector map, detail pages for big layouts, a print
   list per STL file with a filament estimate and a table of every
   placement, on A4, A3, Letter, Legal or Tabloid.

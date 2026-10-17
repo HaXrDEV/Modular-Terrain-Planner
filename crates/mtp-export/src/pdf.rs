@@ -385,6 +385,11 @@ fn print_table(face: &Typeface, rows: &[PrintRow], totals: &PrintTotals, width: 
         Column { title: "Height", width: 1.0, right: true },
         Column { title: "Count", width: 0.9, right: true },
     ];
+    let owned = totals.knows_owned;
+    if owned {
+        columns.push(Column { title: "Owned", width: 0.9, right: true });
+        columns.push(Column { title: "To print", width: 1.0, right: true });
+    }
     if volumes {
         columns.push(Column { title: "Volume", width: 1.3, right: true });
     }
@@ -398,6 +403,10 @@ fn print_table(face: &Typeface, rows: &[PrintRow], totals: &PrintTotals, width: 
                 format!("{} mm", format_mm(r.size.height_mm())),
                 r.count.to_string(),
             ];
+            if owned {
+                row.push(r.owned.map_or(String::new(), |o| o.to_string()));
+                row.push(r.to_print().to_string());
+            }
             if volumes {
                 row.push(r.volume_mm3.map_or("unknown".to_string(), |v| format!("{:.1} cm\u{b3}", v / 1000.0)));
             }
@@ -413,10 +422,14 @@ fn print_table(face: &Typeface, rows: &[PrintRow], totals: &PrintTotals, width: 
     let tiles = if totals.tiles == 1 { "1 tile".to_string() } else { format!("{} tiles", totals.tiles) };
     let files = if totals.files == 1 { "1 file".to_string() } else { format!("{} files", totals.files) };
     let mut summary = vec![format!("Total: {tiles} from {files}.")];
+    if owned {
+        summary.push(format!("{} to print after the ones you own.", totals.to_print));
+    }
     if volumes {
         let mut line = format!(
-            "Filament estimate: {:.1} cm\u{b3} of solid volume. Prints with infill use less.",
-            totals.volume_mm3 / 1000.0
+            "Filament estimate: {:.1} cm\u{b3} of solid volume{}. Prints with infill use less.",
+            totals.volume_mm3 / 1000.0,
+            if owned { " for what's left to print" } else { "" }
         );
         if totals.files_without_volume > 0 {
             line.push_str(&format!(" {} files have no volume yet and aren't counted.", totals.files_without_volume));

@@ -23,16 +23,30 @@ pub struct PrintRow {
     pub size: TileSize,
     /// Solid volume of one print, in cubic millimetres.
     pub volume_mm3: Option<f64>,
+    /// Prints the user already owns, when known.
+    pub owned: Option<u32>,
+}
+
+impl PrintRow {
+    /// How many still need printing.
+    pub fn to_print(&self) -> u32 {
+        self.count - self.owned.unwrap_or(0).min(self.count)
+    }
 }
 
 /// Sums over a print list.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrintTotals {
-    /// Tiles to print.
+    /// Tiles in the layout.
     pub tiles: u32,
+    /// Tiles still to print, after what's owned.
+    pub to_print: u32,
+    /// Whether any row knows how many are owned.
+    pub knows_owned: bool,
     /// Distinct STL files.
     pub files: usize,
-    /// Solid volume of every print whose file has a known volume, in mm³.
+    /// Solid volume of the prints still to make whose file has a known
+    /// volume, in mm³.
     pub volume_mm3: f64,
     /// Files whose volume isn't known, so `volume_mm3` leaves them out.
     pub files_without_volume: usize,
@@ -40,9 +54,11 @@ pub struct PrintTotals {
 
 impl PrintTotals {
     pub fn of(rows: &[PrintRow]) -> Self {
-        let known = rows.iter().filter_map(|r| r.volume_mm3.map(|v| v * f64::from(r.count)));
+        let known = rows.iter().filter_map(|r| r.volume_mm3.map(|v| v * f64::from(r.to_print())));
         Self {
             tiles: rows.iter().map(|r| r.count).sum(),
+            to_print: rows.iter().map(PrintRow::to_print).sum(),
+            knows_owned: rows.iter().any(|r| r.owned.is_some()),
             files: rows.len(),
             volume_mm3: known.sum(),
             files_without_volume: rows.iter().filter(|r| r.volume_mm3.is_none()).count(),
@@ -80,6 +96,7 @@ pub fn print_list(input: &ExportInput) -> Vec<PrintRow> {
             count: 1,
             size: t.size,
             volume_mm3: meta.volume_mm3,
+            owned: meta.owned,
         });
     }
 
@@ -140,6 +157,29 @@ mod label_tests {
         let rows = print_list(&ExportInput { title: "T".into(), state: &s, info: &DefaultInfo, level: None });
         let labels: Vec<&str> = rows.iter().map(|r| r.display_name.as_str()).collect();
         assert_eq!(labels, ["floor (A/OpenForge)", "floor (B/OpenForge)"]);
+    }
+}
+
+#[cfg(test)]
+mod owned_tests {
+    use super::*;
+    use crate::testutil::{state, tile};
+
+    #[test]
+    fn owned_prints_come_off_what_to_print() {
+        let key = TileKey::new("C:/Packs/OpenForge/floor.stl");
+        let s = state(20, 20, (0..5).map(|i| tile(i + 1, key.as_str(), 2, 2, 2.0 * i as f32, 0.0)).collect());
+        let mut info = std::collections::HashMap::new();
+        info.insert(
+            key.clone(),
+            crate::TileMeta { owned: Some(3), volume_mm3: Some(1000.0), ..crate::TileMeta::from_key(&key) },
+        );
+        let rows = print_list(&ExportInput { title: "T".into(), state: &s, info: &info, level: None });
+        assert_eq!(rows[0].to_print(), 2);
+        let totals = PrintTotals::of(&rows);
+        assert_eq!((totals.tiles, totals.to_print), (5, 2));
+        assert_eq!(totals.volume_mm3, 2000.0, "filament only for what's left to print");
+        assert!(totals.knows_owned);
     }
 }
 

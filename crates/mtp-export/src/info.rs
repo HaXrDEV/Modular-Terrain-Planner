@@ -17,6 +17,8 @@ pub struct TileMeta {
     pub color: [u8; 3],
     /// Solid volume in cubic millimetres, when the mesh has been measured.
     pub volume_mm3: Option<f64>,
+    /// How many prints of it the user owns, when they've said.
+    pub owned: Option<u32>,
 }
 
 impl TileMeta {
@@ -27,6 +29,7 @@ impl TileMeta {
             folder: key.folder_name().to_string(),
             color: tile_color(key.folder_name(), key.file_name()),
             volume_mm3: None,
+            owned: None,
         }
     }
 }

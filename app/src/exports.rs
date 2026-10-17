@@ -8,6 +8,7 @@ use mtp_core::tile::TileKey;
 use mtp_export::{ExportInput, Paper, PathMode, PdfOptions, TileMeta};
 
 use crate::editor::Editor;
+use crate::inventory::Inventory;
 use crate::library::Library;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +33,7 @@ pub fn paper(name: &str) -> Paper {
 
 /// What exports print for each tile: names, pack, colour, and the measured
 /// volume for filament estimates.
-fn tile_info(editor: &Editor, library: &Library) -> HashMap<TileKey, TileMeta> {
+pub fn tile_info(editor: &Editor, library: &Library, inventory: &Inventory) -> HashMap<TileKey, TileMeta> {
     editor
         .doc
         .tiles()
@@ -46,9 +47,12 @@ fn tile_info(editor: &Editor, library: &Library) -> HashMap<TileKey, TileMeta> {
                         .map_or_else(|| t.key.folder_name().to_owned(), |f| f.name.clone()),
                     color: lt.color,
                     volume_mm3: Some(lt.volume_mm3),
+                    owned: None,
                 },
                 None => TileMeta::from_key(&t.key),
             };
+            let owned = (!inventory.is_empty()).then(|| inventory.owned(&t.key));
+            let meta = TileMeta { owned, ..meta };
             (t.key.clone(), meta)
         })
         .collect()
@@ -59,6 +63,7 @@ pub fn export(
     kind: ExportKind,
     editor: &Editor,
     library: &Library,
+    inventory: &Inventory,
     paper_name: &str,
     full_paths: bool,
 ) -> Result<Option<PathBuf>, String> {
@@ -78,7 +83,7 @@ pub fn export(
         path.as_mut_os_string().push(format!(".{ext}"));
     }
 
-    let info = tile_info(editor, library);
+    let info = tile_info(editor, library, inventory);
     let input = ExportInput { title, state: editor.doc.state(), info: &info, level: None };
     let result = match kind {
         ExportKind::Pdf => {

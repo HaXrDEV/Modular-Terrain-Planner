@@ -408,6 +408,83 @@ pub fn inspector(ui: &mut egui::Ui, editor: &mut Editor, library: &Library) -> V
     requests
 }
 
+/// What to print for the layout, after what the user owns.
+pub fn print_list(
+    ui: &mut egui::Ui,
+    editor: &Editor,
+    library: &Library,
+    inventory: &mut crate::inventory::Inventory,
+    density: f32,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    if editor.doc.tiles().is_empty() {
+        ui.label(RichText::new("Place some tiles to see what to print.").weak());
+        return problems;
+    }
+    let info = crate::exports::tile_info(editor, library, inventory);
+    let input = mtp_export::ExportInput { title: String::new(), state: editor.doc.state(), info: &info, level: None };
+    let rows = mtp_export::print_list(&input);
+    let grams = |mm3: f64| mm3 / 1000.0 * f64::from(density);
+    let (mut needed, mut to_print, mut filament) = (0u32, 0u32, 0.0f64);
+    let mut set = Vec::new();
+    egui::ScrollArea::vertical().auto_shrink([false, true]).max_height(ui.available_height() - 70.0).show(ui, |ui| {
+        egui::Grid::new("print list").num_columns(4).striped(true).spacing([10.0, 4.0]).show(ui, |ui| {
+            ui.label(RichText::new("Tile").strong());
+            ui.label(RichText::new("Need").strong());
+            ui.label(RichText::new("Own").strong());
+            ui.label(RichText::new("Print").strong());
+            ui.end_row();
+            for r in &rows {
+                let owned = inventory.owned(&r.key);
+                let left = r.count.saturating_sub(owned);
+                needed += r.count;
+                to_print += left;
+                if let Some(v) = r.volume_mm3 {
+                    filament += grams(v) * f64::from(left);
+                }
+                ui.label(&r.display_name).on_hover_text(format!("{}\n{}", r.folder, r.key));
+                ui.label(r.count.to_string());
+                let mut n = owned;
+                if ui.add(egui::DragValue::new(&mut n).range(0..=9999)).changed() {
+                    set.push((r.key.clone(), n));
+                }
+                ui.horizontal(|ui| {
+                    if left == 0 {
+                        ui.label(RichText::new("✔").color(ui.visuals().text_color()));
+                    } else {
+                        ui.label(left.to_string());
+                        if ui.small_button("Printed").on_hover_text("Count these as owned").clicked() {
+                            set.push((r.key.clone(), r.count));
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+        });
+    });
+    for (key, n) in set {
+        if let Err(e) = inventory.set(&key, n) {
+            problems.push(e);
+        }
+    }
+    ui.separator();
+    ui.label(format!("{to_print} of {needed} tiles still to print."));
+    if filament > 0.0 {
+        ui.label(format!("About {filament:.0} g of filament if printed solid; infill uses less."))
+            .on_hover_text(format!("At {density:.2} g/cm³, set under Settings"));
+    }
+    if to_print > 0 && ui.button("Mark everything as printed").clicked() {
+        for r in &rows {
+            if inventory.owned(&r.key) < r.count
+                && let Err(e) = inventory.set(&r.key, r.count)
+            {
+                problems.push(e);
+            }
+        }
+    }
+    problems
+}
+
 pub fn problems(ui: &mut egui::Ui, problems: &mut Vec<Problem>) {
     if problems.is_empty() {
         ui.label(RichText::new("No problems.").weak());

@@ -20,7 +20,8 @@ pub enum PathMode {
     Full,
 }
 
-pub const HEADER: [&str; 7] = ["name", "folder", "file", "count", "size_cells", "height_mm", "volume_cm3"];
+pub const HEADER: [&str; 9] =
+    ["name", "folder", "file", "count", "owned", "to_print", "size_cells", "height_mm", "volume_cm3"];
 
 /// Encodes print list rows as CSV.
 pub fn write_csv(rows: &[PrintRow], mode: PathMode) -> Result<Vec<u8>, ExportError> {
@@ -38,6 +39,8 @@ pub fn write_csv(rows: &[PrintRow], mode: PathMode) -> Result<Vec<u8>, ExportErr
             r.folder.clone(),
             file,
             r.count.to_string(),
+            r.owned.map_or(String::new(), |o| o.to_string()),
+            r.to_print().to_string(),
             format!("{}x{}", r.size.w, r.size.h),
             format_mm(r.size.height_mm()),
             r.volume_mm3.map_or(String::new(), |v| format!("{:.1}", v / 1000.0)),
@@ -85,9 +88,9 @@ mod tests {
         let text = String::from_utf8(write_csv(&rows, PathMode::Relative).expect("csv")).expect("utf-8");
         assert_eq!(
             text,
-            "\u{feff}name,folder,file,count,size_cells,height_mm,volume_cm3\r\n\
-             floor,OpenForge,OpenForge/floor.stl,2,2x1,6,\r\n\
-             \"wall \"\"tall\"\"\",\"Packs, vol 2\",\"Packs, vol 2/wall \"\"tall\"\".stl\",1,2x1,6,\r\n"
+            "\u{feff}name,folder,file,count,owned,to_print,size_cells,height_mm,volume_cm3\r\n\
+             floor,OpenForge,OpenForge/floor.stl,2,,2,2x1,6,\r\n\
+             \"wall \"\"tall\"\"\",\"Packs, vol 2\",\"Packs, vol 2/wall \"\"tall\"\".stl\",1,,1,2x1,6,\r\n"
         );
     }
 

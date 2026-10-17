@@ -8,6 +8,7 @@ mod editor;
 mod exports;
 mod files;
 mod instance;
+mod inventory;
 mod library;
 mod panels;
 mod samples;

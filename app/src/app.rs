@@ -32,6 +32,7 @@ pub enum Tab {
     Library,
     View,
     Inspector,
+    PrintList,
     Problems,
 }
 
@@ -75,6 +76,7 @@ pub struct App {
     render_state: egui_wgpu::RenderState,
     renderer: Renderer,
     library: Library,
+    inventory: crate::inventory::Inventory,
     editor: Editor,
     viewport: Viewport,
     library_panel: LibraryPanel,
@@ -125,7 +127,7 @@ impl App {
         let mut dock = DockState::new(vec![Tab::View]);
         let tree = dock.main_surface_mut();
         let [view, _] = tree.split_left(NodeIndex::root(), 0.22, vec![Tab::Library]);
-        tree.split_right(view, 0.78, vec![Tab::Inspector, Tab::Problems]);
+        tree.split_right(view, 0.78, vec![Tab::Inspector, Tab::PrintList, Tab::Problems]);
 
         cc.egui_ctx.global_style_mut(|s| {
             use egui::{FontFamily, FontId, TextStyle};
@@ -135,6 +137,7 @@ impl App {
             s.text_styles.insert(TextStyle::Heading, FontId::new(17.0, FontFamily::Proportional));
         });
 
+        let (inventory, inventory_problem) = crate::inventory::Inventory::load(&paths.data);
         let projection = if settings.start_in_3d { Projection::Perspective } else { Projection::TopDown };
         let grid = GridSize::DEFAULT;
         let mut app = Self {
@@ -144,6 +147,7 @@ impl App {
             render_state,
             renderer,
             library,
+            inventory,
             library_panel: LibraryPanel::default(),
             dock,
             problems: Vec::new(),
@@ -180,6 +184,9 @@ impl App {
             app.library.add_folder(dir, true);
         }
         app.editor.level_view = app.settings.level_view;
+        if let Some(p) = inventory_problem {
+            app.problem(p);
+        }
         for problem in startup.problems {
             app.problem(problem);
         }
@@ -526,7 +533,14 @@ impl App {
                 Some(Dialog::Message { title: "Nothing to export".into(), text: "Place some tiles first.".into() });
             return;
         }
-        match exports::export(kind, &self.editor, &self.library, &self.settings.paper, self.settings.csv_full_paths) {
+        match exports::export(
+            kind,
+            &self.editor,
+            &self.library,
+            &self.inventory,
+            &self.settings.paper,
+            self.settings.csv_full_paths,
+        ) {
             Ok(Some(path)) => {
                 self.editor.tell(format!("Exported {}.", path.display()));
                 open_in_file_manager(&path);
@@ -1320,6 +1334,15 @@ impl App {
                     }
                 });
                 ui.end_row();
+                ui.label("Filament density");
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.filament_density)
+                        .range(0.5..=3.0)
+                        .speed(0.01)
+                        .suffix(" g/cm³"),
+                )
+                .on_hover_text("For filament weight estimates. PLA is about 1.24, PETG 1.27");
+                ui.end_row();
                 ui.label("Print lists");
                 ui.checkbox(&mut self.settings.csv_full_paths, "Write full file paths (they include your user name)");
                 ui.end_row();
@@ -1467,6 +1490,7 @@ impl TabViewer for App {
             Tab::Library => "Library".into(),
             Tab::View => "Layout".into(),
             Tab::Inspector => "Inspector".into(),
+            Tab::PrintList => "Print list".into(),
             Tab::Problems if self.problems.is_empty() => "Problems".into(),
             Tab::Problems => format!("Problems ({})", self.problems.len()).into(),
         }
@@ -1512,6 +1536,18 @@ impl App {
                     let requests = panels::inspector(ui, &mut self.editor, &self.library);
                     self.requests.extend(requests);
                 });
+            }
+            Tab::PrintList => {
+                let problems = panels::print_list(
+                    ui,
+                    &self.editor,
+                    &self.library,
+                    &mut self.inventory,
+                    self.settings.filament_density,
+                );
+                for p in problems {
+                    self.problem(p);
+                }
             }
             Tab::Problems => panels::problems(ui, &mut self.problems),
         }
