@@ -34,7 +34,7 @@
 | Part | What it does |
 | :--- | :--- |
 | **Library** | Opens folders of STL files (OpenForge, Dragonlock and the like), with pictures, search and footprint filters. Each tile's size in grid cells comes from the file, inches included. |
-| **Layout** | Place, paint, move, turn, copy and stack tiles on a grid in 2D or 3D. Tiles stack only on a level surface, and a red ghost says why a spot won't work. |
+| **Layout** | Place, paint, fill, move, turn, copy and stack tiles on a grid in 2D or 3D, on as many levels as the dungeon has floors. Tiles stack only on a level surface, and a red ghost says why a spot won't work. |
 | **Battle map** | Lays an image under the grid to build on. |
 | **Build plan** | A PDF with a numbered map that shows which way each tile faces, a print list per STL file and a table of every placement. Also a PNG map and a CSV print list. |
 
@@ -76,6 +76,7 @@ Add a folder of STL files with **File > Add tile folder** (or drop it onto the w
 | Move the selection | Drag it, or use the arrow keys |
 | Place freely, off the grid | Hold **Ctrl** |
 | Pick up a placed tile | **Alt**+click it |
+| Build another floor | **Page Up** and **Page Down**, or the Levels box in the view |
 | Look around | Right drag to orbit, middle drag to pan, wheel to zoom, **T** for 2D or 3D |
 | Export the build plan | **Ctrl+E** |
 

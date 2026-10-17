@@ -334,6 +334,16 @@ pub fn inspector(ui: &mut egui::Ui, editor: &mut Editor, library: &Library) -> V
                 editor.delete_selection();
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Move to level");
+            let level = editor.level;
+            if ui.small_button(format!("{}", level + 1)).on_hover_text("The level above").clicked() {
+                editor.move_selection_to_level(level + 1, Mode::Snap);
+            }
+            if ui.small_button(format!("{}", level - 1)).on_hover_text("The level below").clicked() {
+                editor.move_selection_to_level(level - 1, Mode::Snap);
+            }
+        });
         ui.separator();
     }
 

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use eframe::egui::{self, Color32, Key, PointerButton, Pos2, Rect, Sense, Stroke, Vec2 as EVec2};
+use eframe::egui::{self, Color32, Key, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Vec2 as EVec2};
 use eframe::egui_wgpu;
 use glam::{Vec2, Vec3};
 use mtp_core::color::tile_color;
@@ -13,7 +13,7 @@ use mtp_render::picking::{self, MeshView};
 use mtp_render::scene::screen_rect;
 use mtp_render::{Camera, DrawKind, DrawTile, Frame, FrameStats, Palette, Projection, Renderer, Target};
 
-use crate::editor::{Editor, Tool};
+use crate::editor::{Editor, LevelView, Tool};
 use crate::library::Library;
 
 /// Tiers uploaded per frame at most, so a big layout sharpens over a few
@@ -222,23 +222,35 @@ impl Viewport {
 
         // What the pointer is over
         let grid = editor.doc.grid();
-        let doc_tiles: Vec<DrawTile> = editor
-            .doc
-            .tiles()
-            .iter()
-            .map(|t| DrawTile {
-                key: t.key.clone(),
-                x: t.x,
-                y: t.y,
-                z: t.z,
-                size: t.size,
-                rotation: t.rotation,
-                color: color_for(library, &t.key),
-                selected: editor.selection.contains(&t.id),
-                kind: DrawKind::Tile,
-            })
-            .collect();
-        let ids: Vec<PlacedId> = editor.doc.tiles().iter().map(|t| t.id).collect();
+        // Levels: the active one is edited and picked; the others are hidden,
+        // faded (those below) or stacked on top of each other
+        let offsets = level_offsets(editor);
+        let off = if editor.level_view == LevelView::Stacked { offsets(editor.level) } else { 0.0 };
+        let as_draw = |t: &mtp_core::tile::Placed, z: f32, kind: DrawKind| DrawTile {
+            key: t.key.clone(),
+            x: t.x,
+            y: t.y,
+            z,
+            size: t.size,
+            rotation: t.rotation,
+            color: color_for(library, &t.key),
+            selected: editor.selection.contains(&t.id),
+            kind,
+        };
+        let active = editor.level;
+        let on_level: Vec<&mtp_core::tile::Placed> = editor.doc.tiles().iter().filter(|t| t.level == active).collect();
+        let doc_tiles: Vec<DrawTile> = on_level.iter().map(|t| as_draw(t, t.z + off, DrawKind::Tile)).collect();
+        let ids: Vec<PlacedId> = on_level.iter().map(|t| t.id).collect();
+        let mut stacked: Vec<DrawTile> = Vec::new();
+        let mut faded: Vec<DrawTile> = Vec::new();
+        for t in editor.doc.tiles().iter().filter(|t| t.level != active) {
+            match editor.level_view {
+                LevelView::Alone => {}
+                LevelView::Faded if t.level < active => faded.push(as_draw(t, t.z, DrawKind::Ghost)),
+                LevelView::Faded => {}
+                LevelView::Stacked => stacked.push(as_draw(t, t.z + offsets(t.level), DrawKind::Tile)),
+            }
+        }
         let mesh_of = |t: &DrawTile| {
             library.tile(&t.key).map(|lt| {
                 let lod = &lt.mesh.lods[lt.preview_tier()];
@@ -249,7 +261,7 @@ impl Viewport {
             let (origin, dir) = self.camera.ray(uv_of(p), aspect);
             match picking::pick(&doc_tiles, origin, dir, mesh_of) {
                 Some((i, t)) => Some(Hover { point: (origin + dir * t).truncate(), tile: Some(ids[i]) }),
-                None => self.camera.ground_point(uv_of(p), aspect, 0.0).map(|point| Hover { point, tile: None }),
+                None => self.camera.ground_point(uv_of(p), aspect, off).map(|point| Hover { point, tile: None }),
             }
         });
         let ground_at = |p: Pos2, height: f32| self.camera.ground_point(uv_of(p), aspect, height);
@@ -281,7 +293,7 @@ impl Viewport {
                         y = y.round();
                     }
                     let proposal =
-                        Proposal { key: key.clone(), size, size_known: true, x, y, z: 0.0, rotation, level: 0 };
+                        Proposal { key: key.clone(), size, size_known: true, x, y, z: 0.0, rotation, level: active };
                     let check = |m| {
                         rules::arrange(
                             grid,
@@ -326,11 +338,10 @@ impl Viewport {
                     let origin = (x.floor() as i32, y.floor() as i32);
                     // Painting over tiles of the same kind leaves them alone
                     // instead of stacking copies; a click still stacks
-                    let same_there = editor
-                        .doc
-                        .tiles()
-                        .iter()
-                        .any(|t| t.key == key && t.rotation == rotation && t.x == x && t.y == y);
+                    let same_there =
+                        editor.doc.tiles().iter().any(|t| {
+                            t.key == key && t.rotation == rotation && t.x == x && t.y == y && t.level == active
+                        });
                     let paint = matches!(self.drag, Drag::Paint { last } if last != Some(origin)) && !same_there;
                     if modifiers.shift || filling {
                         // Fills and lines were handled above
@@ -350,7 +361,9 @@ impl Viewport {
                         x = x.round();
                         y = y.round();
                     }
-                    let proposals = clip.at(x, y);
+                    // Checked on the level being edited, where paste_at puts them
+                    let proposals: Vec<Proposal> =
+                        clip.at(x, y).into_iter().map(|p| Proposal { level: active, ..p }).collect();
                     let result =
                         rules::arrange(grid, editor.doc.tiles(), &HashSet::new(), &proposals, mode, Height::Settle);
                     let kind = if result.is_ok() { DrawKind::Ghost } else { DrawKind::RefusedGhost };
@@ -397,7 +410,7 @@ impl Viewport {
                                 }
                                 editor.selection.insert(id);
                             }
-                            let height = editor.doc.tile(id).map_or(0.0, |t| t.z);
+                            let height = editor.doc.tile(id).map_or(0.0, |t| t.z) + off;
                             if let Some(start) = ground_at(p, height) {
                                 self.drag = Drag::Move { start, height };
                             }
@@ -498,6 +511,13 @@ impl Viewport {
             ui.ctx().request_repaint();
         }
 
+        for g in &mut ghosts {
+            g.z += off;
+        }
+        ghosts.extend(faded);
+        let mut all_tiles = doc_tiles;
+        all_tiles.extend(stacked);
+
         self.ensure_target(renderer, render_state, size);
         let Some((target, texture)) = self.target.as_mut() else { return };
         let image_rect = editor.doc.ground_image().map(|img| img.rect).filter(|r| r[2] > 0.0 && r[3] > 0.0);
@@ -506,7 +526,7 @@ impl Viewport {
             &Frame {
                 view_proj: self.camera.view_proj(aspect),
                 grid: [grid.cols, grid.rows],
-                tiles: &doc_tiles,
+                tiles: &all_tiles,
                 ghosts: &ghosts,
                 palette: if ui.visuals().dark_mode { Palette::DARK } else { Palette::LIGHT },
                 pixels_per_point: ppp,
@@ -531,6 +551,51 @@ impl Viewport {
         if !ghosts.is_empty() || matches!(self.drag, Drag::Move { .. }) {
             ui.ctx().request_repaint();
         }
+        self.level_strip(ui, rect, editor);
+    }
+
+    /// The level picker in the view's top right corner.
+    fn level_strip(&mut self, ui: &mut egui::Ui, rect: Rect, editor: &mut Editor) {
+        let levels = editor.doc.levels();
+        let lo = levels.first().copied().unwrap_or(0).min(editor.level);
+        let hi = levels.last().copied().unwrap_or(0).max(editor.level);
+        let mut counts = std::collections::HashMap::new();
+        for t in editor.doc.tiles() {
+            *counts.entry(t.level).or_insert(0usize) += 1;
+        }
+        let count = |l: i32| counts.get(&l).copied().unwrap_or(0);
+        egui::Area::new(egui::Id::new("level strip"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(rect.right_top() + EVec2::new(-10.0, 10.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(118.0);
+                    ui.label(RichText::new("Levels").strong()).on_hover_text("Page Up and Page Down switch levels");
+                    if ui.small_button("+ Level above").clicked() {
+                        editor.set_level(hi + 1);
+                    }
+                    for l in (lo..=hi).rev() {
+                        let n = count(l);
+                        let text = if n == 0 { format!("Level {l}") } else { format!("Level {l} ({n})") };
+                        if ui.selectable_label(l == editor.level, text).clicked() {
+                            editor.set_level(l);
+                        }
+                    }
+                    if levels.len() > 1 || editor.level != 0 {
+                        ui.separator();
+                        for (view, label, tip) in [
+                            (LevelView::Alone, "Only this", "Show only the level being edited"),
+                            (LevelView::Faded, "Below faded", "Show the levels below, faded"),
+                            (LevelView::Stacked, "Stacked", "Show every level, each on top of the one below"),
+                        ] {
+                            if ui.selectable_label(editor.level_view == view, label).on_hover_text(tip).clicked() {
+                                editor.level_view = view;
+                            }
+                        }
+                    }
+                });
+            });
     }
 
     fn keyboard(&mut self, ui: &egui::Ui, editor: &mut Editor, mode: Mode) {
@@ -549,6 +614,15 @@ impl Viewport {
             }
             d
         });
+        let (up, down) = ui.input_mut(|i| {
+            (i.consume_key(egui::Modifiers::NONE, Key::PageUp), i.consume_key(egui::Modifiers::NONE, Key::PageDown))
+        });
+        if up {
+            editor.set_level(editor.level + 1);
+        }
+        if down {
+            editor.set_level(editor.level - 1);
+        }
         if nudge != Vec2::ZERO {
             if editor.selection.is_empty() {
                 self.camera.nudge(nudge * 4.0);
@@ -607,6 +681,20 @@ impl Viewport {
 
 fn wgpu_nearest() -> eframe::wgpu::FilterMode {
     eframe::wgpu::FilterMode::Nearest
+}
+
+/// Height at which each level is drawn when levels are stacked: each one on
+/// top of the tallest tile of the level below (level 0 stays on the ground).
+fn level_offsets(editor: &Editor) -> impl Fn(i32) -> f32 + use<> {
+    let mut tops: std::collections::BTreeMap<i32, f32> = std::collections::BTreeMap::new();
+    for t in editor.doc.tiles() {
+        let top = tops.entry(t.level).or_insert(0.0);
+        *top = top.max(t.top());
+    }
+    move |level: i32| {
+        let height = |l: i32| tops.get(&l).copied().unwrap_or(0.0);
+        if level >= 0 { (0..level).map(height).sum() } else { -(level..0).map(height).sum::<f32>() }
+    }
 }
 
 /// The tiles of a rectangle fill, stepping by the footprint from the corner

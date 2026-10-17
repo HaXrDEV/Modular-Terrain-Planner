@@ -201,6 +201,19 @@ impl Document {
         )
     }
 
+    /// Moves tiles to another level, settled on what is there.
+    pub fn move_to_level(&mut self, ids: &[PlacedId], level: i32, mode: Mode) -> Result<(), Refusal> {
+        self.rearrange("Move to level", ids, |t| Proposal { level, ..Proposal::from_placed(t) }, mode, Height::Settle)
+    }
+
+    /// The levels in use, lowest first.
+    pub fn levels(&self) -> Vec<i32> {
+        let mut levels: Vec<i32> = self.state.tiles.iter().map(|t| t.level).collect();
+        levels.sort_unstable();
+        levels.dedup();
+        levels
+    }
+
     /// Tiles that wouldn't fit on a resized grid whose old origin moves by
     /// `shift` cells (to grow or shrink on the left or bottom).
     pub fn outside_after_resize(&self, grid: GridSize, shift: [i32; 2]) -> Vec<PlacedId> {
@@ -393,6 +406,18 @@ mod tests {
         let pillar = d.place("Place", vec![proposal(0.0, 0.0, 1, 1, 4.0)], Mode::Snap).expect("pillar");
         d.move_by(&pillar, 5.0, 0.0, Mode::Snap).expect("onto the floor");
         assert_eq!(d.tile(pillar[0]).map(|t| t.z), Some(0.5));
+    }
+
+    #[test]
+    fn tiles_move_between_levels() {
+        let mut d = doc();
+        let a = d.place("Place", vec![proposal(0.0, 0.0, 2, 2, 0.5)], Mode::Snap).expect("ground");
+        let b = d.place("Place", vec![proposal(0.0, 0.0, 2, 2, 0.5)], Mode::Snap).expect("stacked");
+        assert_eq!(d.tile(b[0]).map(|t| t.z), Some(0.5));
+        d.move_to_level(&b, 1, Mode::Snap).expect("upstairs");
+        assert_eq!(d.tile(b[0]).map(|t| (t.level, t.z)), Some((1, 0.0)), "on its own floor");
+        assert_eq!(d.levels(), [0, 1]);
+        assert!(d.contains(a[0]));
     }
 
     #[test]

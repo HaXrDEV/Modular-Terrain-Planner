@@ -114,6 +114,22 @@ pub struct Editor {
     pub last_placed: Option<(f32, f32)>,
     /// Tiles placed recently, newest first, for keys 1 to 9.
     pub recent: Vec<(TileKey, TileSize)>,
+    /// The level being edited; new tiles go on it.
+    pub level: i32,
+    pub level_view: LevelView,
+}
+
+/// How the levels other than the one being edited are shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LevelView {
+    /// Only the active level.
+    Alone,
+    /// Levels below the active one, faded.
+    #[default]
+    Faded,
+    /// Every level, stacked on top of each other.
+    Stacked,
 }
 
 /// How many recent tiles keys 1 to 9 reach.
@@ -132,6 +148,8 @@ impl Editor {
             revision: 0,
             last_placed: None,
             recent: Vec::new(),
+            level: 0,
+            level_view: LevelView::default(),
         }
     }
 
@@ -263,12 +281,13 @@ impl Editor {
     }
 
     pub fn select_all(&mut self) {
-        self.selection = self.doc.tiles().iter().map(|t| t.id).collect();
+        self.selection = self.doc.tiles().iter().filter(|t| t.level == self.level).map(|t| t.id).collect();
     }
 
     /// Selects every copy of the tiles in the selection (or of `key`).
     pub fn select_same(&mut self, key: &TileKey) {
-        self.selection = self.doc.tiles().iter().filter(|t| t.key == *key).map(|t| t.id).collect();
+        self.selection =
+            self.doc.tiles().iter().filter(|t| t.key == *key && t.level == self.level).map(|t| t.id).collect();
         let n = self.selection.len();
         self.tell(format!("Selected {n} {}.", if n == 1 { "tile" } else { "copies" }));
     }
@@ -296,7 +315,8 @@ impl Editor {
 
     pub fn paste_at(&mut self, x: f32, y: f32, mode: Mode) -> bool {
         let Some(clip) = &self.clipboard else { return false };
-        let proposals = clip.at(x, y);
+        let level = self.level;
+        let proposals: Vec<Proposal> = clip.at(x, y).into_iter().map(|p| Proposal { level, ..p }).collect();
         match self.doc.place("Paste", proposals, mode) {
             Ok(ids) => {
                 self.selection = ids.into_iter().collect();
@@ -342,6 +362,25 @@ impl Editor {
                     self.turn_pivot = Some((self.selection.clone(), pivot, self.revision));
                 }
             }
+        }
+    }
+
+    /// Switches the level being edited; the selection stays on its level.
+    pub fn set_level(&mut self, level: i32) {
+        if level != self.level {
+            self.level = level;
+            let doc = &self.doc;
+            self.selection.retain(|id| doc.tile(*id).is_some_and(|t| t.level == level));
+            self.tell(format!("Editing level {level}."));
+        }
+    }
+
+    pub fn move_selection_to_level(&mut self, level: i32, mode: Mode) {
+        let ids: Vec<PlacedId> = self.selection.iter().copied().collect();
+        let result = self.doc.move_to_level(&ids, level, mode);
+        if self.report(result) {
+            self.level = level;
+            self.tell(format!("Moved {} tiles to level {level}.", ids.len()));
         }
     }
 

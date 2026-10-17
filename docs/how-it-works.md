@@ -48,7 +48,8 @@ function, `rules::arrange`, where its tiles land:
 - Tiles may not overlap: two footprints sharing a cell must not share any
   height.
 
-Holding Ctrl (free placement) keeps only the grid-edge check. Groups settle
+Each level is its own floor: the checks only look at tiles on the same
+level. Holding Ctrl (free placement) keeps only the grid-edge check. Groups settle
 bottom first, so a wall moved together with the floor under it stays on it.
 A refused edit changes nothing and leaves no undo step.
 

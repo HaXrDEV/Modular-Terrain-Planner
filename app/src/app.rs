@@ -179,6 +179,7 @@ impl App {
         for dir in startup.open.iter().filter(|p| p.is_dir()) {
             app.library.add_folder(dir, true);
         }
+        app.editor.level_view = app.settings.level_view;
         for problem in startup.problems {
             app.problem(problem);
         }
@@ -258,7 +259,9 @@ impl App {
     }
 
     fn replace_editor(&mut self, editor: Editor) {
+        let view = self.editor.level_view;
         self.editor = editor;
+        self.editor.level_view = view;
         self.editor.changed();
         self.discard_own_autosave();
         self.load_ground_image();
@@ -758,6 +761,7 @@ impl App {
     }
 
     fn remember_session(&mut self) {
+        self.settings.level_view = self.editor.level_view;
         self.settings.session_folders = self
             .library
             .folders()
@@ -901,6 +905,7 @@ impl App {
                 Tool::Paste => "Click to paste · Q/E turn · Esc stops",
             };
             ui.label(RichText::new(tool).strong());
+            ui.label(RichText::new(format!("Level {}", self.editor.level)).weak());
             let notice = self.editor.notice.as_ref().filter(|n| n.at.elapsed() < Duration::from_secs(6));
             if let Some(r) = &self.viewport.refusal {
                 ui.label(RichText::new(r.to_string()).color(ui.visuals().warn_fg_color));

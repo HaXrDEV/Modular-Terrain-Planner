@@ -128,6 +128,8 @@ pub struct Settings {
     pub paper: String,
     /// Write absolute paths in CSV print lists (they show usernames).
     pub csv_full_paths: bool,
+    /// How levels other than the one being edited are shown.
+    pub level_view: crate::editor::LevelView,
 }
 
 impl Default for Settings {
@@ -146,6 +148,7 @@ impl Default for Settings {
             thumbnail_size: 88.0,
             paper: "A4".into(),
             csv_full_paths: false,
+            level_view: crate::editor::LevelView::default(),
         }
     }
 }

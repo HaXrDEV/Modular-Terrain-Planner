@@ -134,6 +134,7 @@ pub const MOUSE: &[(&str, &str)] = &[
     ("Right click", "Menu for the tile under the pointer"),
     ("Arrow keys", "Nudge the selection a cell (Shift: 1\"), or pan"),
     ("W A S D", "Pan"),
+    ("Page Up, Page Down", "Edit the level above or below"),
 ];
 
 #[cfg(test)]

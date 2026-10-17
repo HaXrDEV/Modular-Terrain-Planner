@@ -18,6 +18,8 @@ saving writes format version 5, which earlier versions can't open.
   either way and arrows nudge. Right click opens a menu.
 - A 2D top-down view (the default) and a 3D view, zooming toward the
   pointer.
+- Levels for multi-storey dungeons: each is its own floor, the others are
+  hidden, faded or stacked, and the build plan gives each its own map.
 - A red, hatched ghost and a reason when a tile can't go somewhere.
 - Build plan PDF with a vector map, detail pages for big layouts, a print
   list per STL file with a filament estimate and a table of every

@@ -123,17 +123,20 @@ pub fn arrange(
         if !grid.contains(p.x, p.y, across, deep) {
             return Err(Refusal::OutsideGrid);
         }
+        // Each level is its own floor: tiles on other levels don't collide
+        let level = p.level;
+        let other_level = |i: usize| working[i].level != level;
         let z = match height {
             Height::Keep => p.z,
             Height::Settle => {
-                let support = index.support(&working, probe.cells(), |_| false);
+                let support = index.support(&working, probe.cells(), other_level);
                 if mode == Mode::Snap && !support.is_level() {
                     return Err(Refusal::Uneven { low: support.low, high: support.high });
                 }
                 support.high
             }
         };
-        if mode == Mode::Snap && index.overlapping(&working, probe.cells(), z, z + p.size.gz, |_| false).is_some() {
+        if mode == Mode::Snap && index.overlapping(&working, probe.cells(), z, z + p.size.gz, other_level).is_some() {
             return Err(Refusal::Overlaps);
         }
         let placed = p.clone().into_placed(PlacedId(u64::MAX - i as u64), z);
@@ -224,6 +227,13 @@ mod tests {
         );
         // Keeping its height on the ground runs into the bridge
         assert_eq!(arrange(GRID, &tiles, &none(), &[pillar], Mode::Snap, Height::Keep), Err(Refusal::Overlaps));
+    }
+
+    #[test]
+    fn levels_are_separate_floors() {
+        let ground = placed(1, proposal(0.0, 0.0, 2, 2, 0.5), 0.0);
+        let upstairs = Proposal { level: 1, ..proposal(0.0, 0.0, 2, 2, 0.5) };
+        assert_eq!(arrange(GRID, &[ground], &none(), &[upstairs], Mode::Snap, Height::Settle), Ok(vec![0.0]));
     }
 
     #[test]
