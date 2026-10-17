@@ -1453,6 +1453,22 @@ impl App {
                 )
                 .on_hover_text("For filament weight estimates. PLA is about 1.24, PETG 1.27");
                 ui.end_row();
+                ui.label("Filament price");
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.filament_price)
+                        .range(0.0..=1000.0)
+                        .speed(0.5)
+                        .suffix(" per kg"),
+                )
+                .on_hover_text("For cost estimates in the Print List; 0 hides them");
+                ui.end_row();
+                ui.label("Build plate");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut self.settings.bed_mm[0]).range(50.0..=1000.0).suffix(" mm"));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut self.settings.bed_mm[1]).range(50.0..=1000.0).suffix(" mm"));
+                });
+                ui.end_row();
                 ui.label("Print lists");
                 ui.checkbox(&mut self.settings.csv_full_paths, "Write full file paths (they include your user name)");
                 ui.end_row();
@@ -1654,13 +1670,7 @@ impl App {
                 });
             }
             Tab::PrintList => {
-                let problems = panels::print_list(
-                    ui,
-                    &self.editor,
-                    &self.library,
-                    &mut self.inventory,
-                    self.settings.filament_density,
-                );
+                let problems = panels::print_list(ui, &self.editor, &self.library, &mut self.inventory, &self.settings);
                 for p in problems {
                     self.problem(p);
                 }

@@ -36,7 +36,7 @@
 | **Library** | Opens folders of STL files (OpenForge, Dragonlock and the like), with pictures, search and footprint filters. Each tile's size in grid cells comes from the file, inches included. |
 | **Layout** | Place, paint, fill, move, turn, copy and stack tiles on a grid in 2D or 3D, on as many levels as the dungeon has floors. Tiles stack only on a level surface, and a red ghost says why a spot won't work. |
 | **Battle map** | Lays an image under the grid to build on. |
-| **Print list** | Shows what to print for the layout after what you already own, with a filament estimate, and remembers your prints across projects. |
+| **Print list** | Shows what to print for the layout after what you already own, with filament, cost and build plate estimates, and remembers your prints across projects. |
 | **Build plan** | A PDF with a numbered map that shows which way each tile faces, a print list per STL file and a table of every placement. Also a PNG map and a CSV print list. |
 
 - **Fast.** Thousands of tiles stay smooth, far-away tiles are drawn with less detail, and a library opens instantly the second time.

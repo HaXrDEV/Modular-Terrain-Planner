@@ -448,8 +448,9 @@ pub fn print_list(
     editor: &Editor,
     library: &Library,
     inventory: &mut crate::inventory::Inventory,
-    density: f32,
+    settings: &crate::settings::Settings,
 ) -> Vec<String> {
+    let density = settings.filament_density;
     let mut problems = Vec::new();
     if editor.doc.tiles().is_empty() {
         ui.label(RichText::new("Place some tiles to see what to print.").weak());
@@ -460,6 +461,7 @@ pub fn print_list(
     let rows = mtp_export::print_list(&input);
     let grams = |mm3: f64| mm3 / 1000.0 * f64::from(density);
     let (mut needed, mut to_print, mut filament) = (0u32, 0u32, 0.0f64);
+    let mut parts: Vec<(f64, f64)> = Vec::new();
     let mut set = Vec::new();
     egui::ScrollArea::vertical().auto_shrink([false, true]).max_height(ui.available_height() - 70.0).show(ui, |ui| {
         egui::Grid::new("print list").num_columns(4).striped(true).spacing([10.0, 4.0]).show(ui, |ui| {
@@ -476,6 +478,12 @@ pub fn print_list(
                 if let Some(v) = r.volume_mm3 {
                     filament += grams(v) * f64::from(left);
                 }
+                // The STL's own footprint when loaded, else its cells
+                let footprint = library.tile(&r.key).map_or(
+                    (f64::from(r.size.w) * mtp_core::units::CELL_MM, f64::from(r.size.h) * mtp_core::units::CELL_MM),
+                    |t| (t.mesh.extent_mm[0], t.mesh.extent_mm[1]),
+                );
+                parts.extend(std::iter::repeat_n(footprint, left as usize));
                 ui.label(&r.display_name).on_hover_text(format!("{}\n{}", r.folder, r.key));
                 ui.label(r.count.to_string());
                 let mut n = owned;
@@ -506,6 +514,23 @@ pub fn print_list(
     if filament > 0.0 {
         ui.label(format!("About {filament:.0} g of filament if printed solid; infill uses less."))
             .on_hover_text(format!("At {density:.2} g/cm³, set under Settings"));
+        if settings.filament_price > 0.0 {
+            ui.label(format!("About {:.2} in filament.", filament / 1000.0 * f64::from(settings.filament_price)));
+        }
+    }
+    if !parts.is_empty() {
+        let [w, d] = settings.bed_mm;
+        let bed = crate::plates::Bed { width: f64::from(w), depth: f64::from(d), gap: 3.0 };
+        let packing = crate::plates::pack(&parts, bed);
+        let plates = if packing.plates == 1 { "1 plate".to_owned() } else { format!("{} plates", packing.plates) };
+        ui.label(format!("About {plates} on a {w:.0} × {d:.0} mm bed."))
+            .on_hover_text("Tiles packed in rows, 3 mm apart. Set the bed size under Settings.");
+        if packing.too_big > 0 {
+            ui.label(
+                RichText::new(format!("{} tiles are bigger than the bed.", packing.too_big))
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
     }
     if to_print > 0 && ui.button("Mark everything as printed").clicked() {
         for r in &rows {

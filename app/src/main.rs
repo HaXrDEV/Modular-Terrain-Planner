@@ -12,6 +12,7 @@ mod inventory;
 mod library;
 mod palette;
 mod panels;
+mod plates;
 mod samples;
 mod selftest;
 mod settings;

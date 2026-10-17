@@ -132,6 +132,10 @@ pub struct Settings {
     pub level_view: crate::editor::LevelView,
     /// Filament density in g/cm³ for weight estimates (PLA is about 1.24).
     pub filament_density: f32,
+    /// Price of a kilogram of filament, in the user's currency (0 hides costs).
+    pub filament_price: f32,
+    /// Build plate size in millimetres, for plate counts.
+    pub bed_mm: [f32; 2],
 }
 
 impl Default for Settings {
@@ -152,6 +156,8 @@ impl Default for Settings {
             csv_full_paths: false,
             level_view: crate::editor::LevelView::default(),
             filament_density: 1.24,
+            filament_price: 0.0,
+            bed_mm: [220.0, 220.0],
         }
     }
 }
@@ -190,6 +196,12 @@ impl Settings {
         self.thumbnail_size =
             if self.thumbnail_size.is_finite() { self.thumbnail_size.clamp(48.0, 192.0) } else { 88.0 };
         self.recent_projects.truncate(MAX_RECENT);
+        if !self.bed_mm.iter().all(|v| v.is_finite() && (50.0..=1000.0).contains(v)) {
+            self.bed_mm = [220.0, 220.0];
+        }
+        if !self.filament_price.is_finite() || self.filament_price < 0.0 {
+            self.filament_price = 0.0;
+        }
         if !self.filament_density.is_finite() || !(0.5..=3.0).contains(&self.filament_density) {
             self.filament_density = 1.24;
         }
