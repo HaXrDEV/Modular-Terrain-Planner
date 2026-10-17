@@ -23,7 +23,7 @@ pub mod parse;
 pub mod scan;
 
 pub use cache::MeshCache;
-pub use load::{LOADER_VERSION, LoadError, LoadErrorKind, LoadedTile, load_many, load_tile};
+pub use load::{LOADER_VERSION, LoadError, LoadErrorKind, LoadedTile, load_bytes, load_many, load_tile};
 pub use mesh::IndexedMesh;
 pub use parse::{StlError, Triangle, parse_stl};
 pub use scan::scan_folder;

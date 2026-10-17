@@ -2,7 +2,7 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-modular-terrain-planner">
     <comment>Modular Terrain Planner project</comment>
-    <sub-class-of type="application/json"/>
+    <sub-class-of type="application/zip"/>
     <glob pattern="*.mtp"/>
   </mime-type>
 </mime-info>

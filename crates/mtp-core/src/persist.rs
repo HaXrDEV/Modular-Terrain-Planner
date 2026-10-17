@@ -17,6 +17,16 @@ pub fn backup_path(path: &Path) -> PathBuf {
 /// then renames it over `path`. With `keep_backup`, the previous file is
 /// copied to [`backup_path`] first.
 pub fn write_atomic(path: &Path, contents: &[u8], keep_backup: bool) -> io::Result<()> {
+    write_atomic_with(path, keep_backup, |f| f.write_all(contents))
+}
+
+/// [`write_atomic`] for contents too big to hold in memory: `write` streams
+/// them into the temporary file.
+pub fn write_atomic_with(
+    path: &Path,
+    keep_backup: bool,
+    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> io::Result<()> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
     tmp_name.push(format!(".{}.tmp", std::process::id()));
@@ -24,7 +34,7 @@ pub fn write_atomic(path: &Path, contents: &[u8], keep_backup: bool) -> io::Resu
 
     let result = (|| {
         let mut f = fs::File::create(&tmp)?;
-        f.write_all(contents)?;
+        write(&mut f)?;
         f.sync_all()?;
         drop(f);
         if keep_backup && path.exists() {

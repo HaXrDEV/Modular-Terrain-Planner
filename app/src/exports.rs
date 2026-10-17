@@ -42,9 +42,10 @@ pub fn tile_info(editor: &Editor, library: &Library, inventory: &Inventory) -> H
             let meta = match library.tile(&t.key) {
                 Some(lt) => TileMeta {
                     name: lt.name.clone(),
-                    folder: library
-                        .folder(lt.folder)
-                        .map_or_else(|| t.key.folder_name().to_owned(), |f| f.name.clone()),
+                    // A tile from inside the project names the pack it came from
+                    folder: lt.pack.clone().unwrap_or_else(|| {
+                        library.folder(lt.folder).map_or_else(|| t.key.folder_name().to_owned(), |f| f.name.clone())
+                    }),
                     color: lt.color,
                     volume_mm3: Some(lt.volume_mm3),
                     owned: None,

@@ -35,11 +35,11 @@
 | **Layout** | Paint, fill, turn and stack tiles in 2D or 3D, across levels and over a battle map |
 | **Smart tools** | Stamps, tile variants, walls around a room and a measuring tool |
 | **Print list** | What to print after the tiles you own, with filament, cost and build plate estimates |
-| **Build plan** | A PDF with a numbered map and every placement, plus a PNG map and a CSV |
+| **Build plan** | A PDF with a numbered map and every placement, plus a PNG map, a CSV and the STL files |
 
 - **Fast.** Thousands of tiles stay smooth, and a library opens instantly the second time.
 - **Safe.** Saves are atomic, unsaved work survives a crash, and tiles with a missing STL are kept.
-- **Offline.** No account and no telemetry. Projects are plain JSON files with relative paths.
+- **Portable.** A project carries its STL files and battle map, and opens complete on any computer. No account, no telemetry.
 
 The grid is 12.5 mm, so a 1" battle map square is 2 × 2 cells.
 

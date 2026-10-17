@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use mtp_stl::{MeshCache, load_tile};
+use mtp_stl::{MeshCache, load_bytes, load_tile};
 
 /// Copies a fixture into `dir` so its stamp can be changed.
 fn copy_fixture(dir: &Path, name: &str) -> PathBuf {
@@ -110,4 +110,28 @@ fn clearing_removes_files_left_by_a_crash() {
     cache.clear().expect("clear");
     assert!(cache_files(&dir).is_empty(), "{:?}", cache_files(&dir));
     assert_eq!(cache.size_bytes(), 0);
+}
+
+#[test]
+fn bytes_load_like_the_file_and_are_cached_by_contents() {
+    let cache_dir = tempfile::tempdir().expect("temp dir");
+    let meshes = cache_dir.path().join("meshes");
+    let cache = MeshCache::new(meshes.clone(), 1 << 30);
+    let path = common::fixture("good/floor_2x2_mm.stl");
+    let bytes = fs::read(&path).expect("fixture");
+    let from_file = load_tile(&path, None).expect("file");
+
+    // An STL inside a project, named after where its folder used to be
+    let named = Path::new("C:/Gone/floor_2x2_mm.stl");
+    let first = load_bytes(named, &bytes, Some(&cache)).expect("bytes");
+    assert_eq!(cache_files(&meshes).len(), 1);
+    let again = load_bytes(named, &bytes, Some(&cache)).expect("cached");
+    assert_eq!(cache_files(&meshes).len(), 1, "the same contents are prepared once");
+    assert_eq!(first, again);
+    assert_eq!((first.path.as_path(), first.name.as_str()), (named, "floor_2x2_mm"));
+    assert_eq!(
+        (first.size, first.lods.len(), first.volume_mm3),
+        (from_file.size, from_file.lods.len(), from_file.volume_mm3)
+    );
+    assert!(load_bytes(named, b"not an STL file", None).is_err());
 }
