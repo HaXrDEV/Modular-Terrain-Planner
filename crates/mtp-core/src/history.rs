@@ -101,6 +101,11 @@ impl<T> History<T> {
         self.saved = Some(self.cursor);
     }
 
+    /// Marks the current state as not saved anywhere (recovered work).
+    pub fn mark_unsaved(&mut self) {
+        self.saved = None;
+    }
+
     /// Changes every state in the history the same way, for facts learnt
     /// later (a missing tile's real size) that undo must not take back.
     pub fn map_states(&mut self, mut f: impl FnMut(&T) -> Option<T>) {

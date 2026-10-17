@@ -310,6 +310,10 @@ impl Document {
     pub fn mark_saved(&mut self) {
         self.history.mark_saved();
     }
+
+    pub fn mark_unsaved(&mut self) {
+        self.history.mark_unsaved();
+    }
 }
 
 #[cfg(test)]
