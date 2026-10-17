@@ -74,6 +74,7 @@ Add a folder of STL files with **File > Add tile folder** (or drop it onto the w
 | Fill a room, draw a wall | **Shift**+drag fills a rectangle, **Shift**+click draws a line from the last tile |
 | Switch tiles quickly | **1** to **9** pick a recently placed tile |
 | Turn | **Q** and **E** |
+| Mix in variants | **C** and **Shift+C** cycle through tiles of the same size; *Edit > Randomise variants* mixes them into a selection |
 | Move the selection | Drag it, or use the arrow keys |
 | Place freely, off the grid | Hold **Ctrl** |
 | Pick up a placed tile | **Alt**+click it |

@@ -387,6 +387,42 @@ impl Editor {
         }
     }
 
+    /// Swaps every selected tile for a tile of the same footprint from
+    /// `choices(tile)`, picked at random, so a floor of one tile doesn't look
+    /// repetitive. One undo step.
+    pub fn randomise_selection(&mut self, choices: impl Fn(&Placed) -> Vec<(TileKey, TileSize)>, mode: Mode) {
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0x9e37_79b9, |d| d.as_nanos() as u64)
+            | 1;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let changes: Vec<(PlacedId, TileKey, TileSize)> = self
+            .selected_tiles()
+            .into_iter()
+            .filter_map(|t| {
+                let options = choices(t);
+                (options.len() > 1).then(|| {
+                    let (key, size) = options[(next() % options.len() as u64) as usize].clone();
+                    (t.id, key, size)
+                })
+            })
+            .collect();
+        if changes.is_empty() {
+            self.tell("No other tiles of the same size to mix in.");
+            return;
+        }
+        let n = changes.len();
+        let result = self.doc.replace_each("Randomise variants", &changes, mode);
+        if self.report(result) {
+            self.tell(format!("Mixed variants into {n} tiles."));
+        }
+    }
+
     pub fn replace_selection(&mut self, key: &TileKey, size: TileSize, mode: Mode) {
         let ids: Vec<PlacedId> = self.selection.iter().copied().collect();
         let result = self.doc.replace_with(&ids, key, size, mode);

@@ -123,6 +123,19 @@ impl Library {
         self.tiles.values()
     }
 
+    /// Tiles with the same footprint as `size` (either way round) in the
+    /// folder `folder`, or in every folder, in library order.
+    pub fn same_size(&self, size: TileSize, folder: Option<FolderId>) -> Vec<&Tile> {
+        let fits = |t: &Tile| (t.size.w, t.size.h) == (size.w, size.h) || (t.size.w, t.size.h) == (size.h, size.w);
+        self.folders
+            .iter()
+            .filter(|f| folder.is_none_or(|id| id == f.id))
+            .flat_map(|f| f.tiles.iter())
+            .filter_map(|k| self.tiles.get(k))
+            .filter(|t| fits(t))
+            .collect()
+    }
+
     pub fn cache(&self) -> Option<&MeshCache> {
         self.cache.as_deref()
     }

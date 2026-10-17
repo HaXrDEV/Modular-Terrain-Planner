@@ -492,6 +492,34 @@ impl App {
                     self.editor.select_same(&key);
                 }
             }
+            Command::NextVariant | Command::PreviousVariant => {
+                let forward = command == Command::NextVariant;
+                if let Tool::Place { key, size, rotation } = self.editor.tool.clone() {
+                    let folder = self.library.tile(&key).map(|t| t.folder);
+                    let options = self.library.same_size(size, folder);
+                    if let Some(i) = options.iter().position(|t| t.key == key) {
+                        let n = options.len();
+                        let next = options[if forward { (i + 1) % n } else { (i + n - 1) % n }];
+                        self.editor.tool = Tool::Place { key: next.key.clone(), size: next.size, rotation };
+                        self.editor.tell(format!("Placing {}.", next.name));
+                    }
+                }
+            }
+            Command::RandomiseVariants => {
+                let library = &self.library;
+                self.editor.randomise_selection(
+                    |t| {
+                        let folder = library.tile(&t.key).map(|lt| lt.folder);
+                        library
+                            .same_size(t.size, folder)
+                            .into_iter()
+                            .filter(|c| (c.size.w, c.size.h) == (t.size.w, t.size.h))
+                            .map(|c| (c.key.clone(), c.size))
+                            .collect()
+                    },
+                    mode,
+                );
+            }
             Command::TurnLeft => self.editor.turn(Turn::CounterClockwise, mode),
             Command::TurnRight => self.editor.turn(Turn::Clockwise, mode),
             Command::ToolSelect => self.editor.tool = Tool::Select,
@@ -862,6 +890,7 @@ impl App {
                 item(ui, Command::Delete, sel, &mut chosen);
                 item(ui, Command::SelectAll, true, &mut chosen);
                 item(ui, Command::SelectSame, sel, &mut chosen);
+                item(ui, Command::RandomiseVariants, sel, &mut chosen);
                 ui.separator();
                 item(ui, Command::TurnLeft, true, &mut chosen);
                 item(ui, Command::TurnRight, true, &mut chosen);

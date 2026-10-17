@@ -214,6 +214,31 @@ impl Document {
         levels
     }
 
+    /// Swaps each listed tile for its own replacement, in place and with the
+    /// same turn, as one undo step.
+    pub fn replace_each(
+        &mut self,
+        label: &str,
+        changes: &[(PlacedId, TileKey, TileSize)],
+        mode: Mode,
+    ) -> Result<(), Refusal> {
+        let map: std::collections::HashMap<PlacedId, (TileKey, TileSize)> =
+            changes.iter().map(|(id, k, s)| (*id, (k.clone(), *s))).collect();
+        let ids: Vec<PlacedId> = changes.iter().map(|(id, _, _)| *id).collect();
+        self.rearrange(
+            label,
+            &ids,
+            |t| match map.get(&t.id) {
+                Some((key, size)) => {
+                    Proposal { key: key.clone(), size: *size, size_known: true, ..Proposal::from_placed(t) }
+                }
+                None => Proposal::from_placed(t),
+            },
+            mode,
+            Height::Settle,
+        )
+    }
+
     /// Tiles that wouldn't fit on a resized grid whose old origin moves by
     /// `shift` cells (to grow or shrink on the left or bottom).
     pub fn outside_after_resize(&self, grid: GridSize, shift: [i32; 2]) -> Vec<PlacedId> {
@@ -418,6 +443,21 @@ mod tests {
         assert_eq!(d.tile(b[0]).map(|t| (t.level, t.z)), Some((1, 0.0)), "on its own floor");
         assert_eq!(d.levels(), [0, 1]);
         assert!(d.contains(a[0]));
+    }
+
+    #[test]
+    fn each_tile_gets_its_own_replacement() {
+        let mut d = doc();
+        let ids = d
+            .place("Place", vec![proposal(0.0, 0.0, 2, 2, 0.5), proposal(2.0, 0.0, 2, 2, 0.5)], Mode::Snap)
+            .expect("fits");
+        let (a, b) = (TileKey::new("C:/T/a.stl"), TileKey::new("C:/T/b.stl"));
+        let size = TileSize { w: 2, h: 2, gz: 0.5 };
+        d.replace_each("Vary", &[(ids[0], a.clone(), size), (ids[1], b.clone(), size)], Mode::Snap).expect("same size");
+        assert_eq!(d.tile(ids[0]).map(|t| t.key.clone()), Some(a));
+        assert_eq!(d.tile(ids[1]).map(|t| t.key.clone()), Some(b));
+        d.undo();
+        assert_ne!(d.tile(ids[0]).map(|t| t.key.clone()), Some(TileKey::new("C:/T/a.stl")));
     }
 
     #[test]
