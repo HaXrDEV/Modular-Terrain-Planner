@@ -112,6 +112,61 @@ fn draws_tiles_ghosts_and_the_selection_outline() {
     assert!(ghost[0] > ghost[1] + 20, "the refused ghost is red: {ghost:?}");
 }
 
+/// Renders a 16 × 10 grid from above and returns the pixel over (x, y).
+fn pixel_at(r: &mut Renderer, tiles: &[DrawTile], ghosts: &[DrawTile], x: f32, y: f32) -> [u8; 4] {
+    let camera = Camera::for_grid(16, 10, Projection::TopDown);
+    let mut target = r.create_target([320, 200]);
+    let frame = Frame {
+        view_proj: camera.view_proj(1.6),
+        grid: [16, 10],
+        tiles,
+        ghosts,
+        palette: Palette::DARK,
+        pixels_per_point: 1.0,
+        show_ground: true,
+        show_grid: false,
+        image_rect: None,
+        lod_bias: 1.0,
+    };
+    r.render(&mut target, &frame);
+    let p = camera.view_proj(1.6).project_point3(glam::Vec3::new(x, y, 1.0));
+    pixel(&r.read_output(&target), 320, ((p.x + 1.0) * 160.0) as u32, ((1.0 - p.y) * 100.0) as u32)
+}
+
+#[test]
+fn a_ghost_in_the_same_place_as_a_tile_stays_behind_it() {
+    // A faded level is drawn where the level being edited is, so their
+    // floors share a plane; without a bias the two fought pixel by pixel
+    let _turn = gpu_turn();
+    let Some(mut r) = renderer() else { return };
+    let key = TileKey::new("cube.stl");
+    let (p, i) = cube();
+    r.register_mesh(key.clone(), vec![12]);
+    r.upload_tier(&key, 0, &p, &i);
+    let floor = [tile(&key, 2.0, false, DrawKind::Tile)];
+    let blue = DrawTile { color: [40, 120, 220], ..tile(&key, 2.0, false, DrawKind::Ghost) };
+    let alone = pixel_at(&mut r, &floor, &[], 3.0, 5.0);
+    assert_eq!(pixel_at(&mut r, &floor, &[blue], 3.0, 5.0), alone);
+}
+
+#[test]
+fn overlapping_faded_levels_look_the_same_in_any_order() {
+    // See-through tiles used to blend in draw order, and the order changed
+    // as the camera moved, so overlaps changed colour
+    let _turn = gpu_turn();
+    let Some(mut r) = renderer() else { return };
+    let key = TileKey::new("cube.stl");
+    let (p, i) = cube();
+    r.register_mesh(key.clone(), vec![12]);
+    r.upload_tier(&key, 0, &p, &i);
+    let below = DrawTile { color: [220, 60, 60], ..tile(&key, 2.0, false, DrawKind::Faded(1)) };
+    let further = DrawTile { color: [60, 60, 220], ..tile(&key, 3.0, false, DrawKind::Faded(2)) };
+    let one_way = pixel_at(&mut r, &[], &[below.clone(), further.clone()], 3.5, 5.0);
+    let other_way = pixel_at(&mut r, &[], &[further, below], 3.5, 5.0);
+    assert_eq!(one_way, other_way);
+    assert!(one_way[0] > one_way[2], "the level right below is in front: {one_way:?}");
+}
+
 #[test]
 fn thumbnails_render_the_finest_resident_tier() {
     let _turn = gpu_turn();

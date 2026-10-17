@@ -251,7 +251,10 @@ impl Viewport {
         for t in editor.doc.tiles().iter().filter(|t| t.level != active) {
             match editor.level_view {
                 LevelView::Alone => {}
-                LevelView::Faded if t.level < active => faded.push(as_draw(t, t.z, DrawKind::Ghost)),
+                LevelView::Faded if t.level < active => {
+                    let down = u8::try_from(active - t.level).unwrap_or(u8::MAX);
+                    faded.push(as_draw(t, t.z, DrawKind::Faded(down)));
+                }
                 LevelView::Faded => {}
                 LevelView::Stacked => stacked.push(as_draw(t, t.z + offsets(t.level), DrawKind::Tile)),
             }

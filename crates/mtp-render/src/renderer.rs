@@ -125,6 +125,7 @@ pub struct Renderer {
     meshes: HashMap<TileKey, Tiers>,
     placeholder: (wgpu::Buffer, u32),
     tile_pipeline: wgpu::RenderPipeline,
+    ghost_depth_pipeline: wgpu::RenderPipeline,
     ghost_pipeline: wgpu::RenderPipeline,
     mask_pipeline: wgpu::RenderPipeline,
     ground_pipeline: wgpu::RenderPipeline,
@@ -269,15 +270,16 @@ impl Renderer {
                 attributes: &instance_attrs,
             }),
         ];
-        let depth = |write: bool, compare| {
+        let depth = |write: bool, compare, bias| {
             Some(wgpu::DepthStencilState {
                 format: DEPTH,
                 depth_write_enabled: Some(write),
                 depth_compare: Some(compare),
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                bias,
             })
         };
+        let no_bias = wgpu::DepthBiasState::default();
         let msaa = wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false };
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
 
@@ -287,6 +289,7 @@ impl Renderer {
                         vertex_buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
                         format,
                         blend,
+                        writes,
                         depth_state,
                         multisample| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -305,28 +308,74 @@ impl Renderer {
                     module: &scene_shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: writes })],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
+        use wgpu::ColorWrites;
         use wgpu::CompareFunction::{Always, LessEqual};
-        let tile_pipeline =
-            pipeline("tiles", "vs_tile", "fs_tile", &buffers, COLOR_FORMAT, None, depth(true, LessEqual), msaa);
-        let ghost_pipeline =
-            pipeline("ghosts", "vs_tile", "fs_tile", &buffers, COLOR_FORMAT, blend, depth(false, LessEqual), msaa);
-        let mask_pipeline =
-            pipeline("selection", "vs_tile", "fs_mask", &buffers, MASK, None, None, wgpu::MultisampleState::default());
+        let all = ColorWrites::ALL;
+        let tile_pipeline = pipeline(
+            "tiles",
+            "vs_tile",
+            "fs_tile",
+            &buffers,
+            COLOR_FORMAT,
+            None,
+            all,
+            depth(true, LessEqual, no_bias),
+            msaa,
+        );
+        // Ghosts and faded levels are see-through, so they take two passes:
+        // depth first, then colour only where each is nearest. Every pixel
+        // shows one ghost surface, whatever order they come in (before,
+        // overlaps changed colour as the camera moved). The bias keeps them
+        // behind a tile in the same place.
+        let ghost_bias = wgpu::DepthBiasState { constant: 4, slope_scale: 1.5, clamp: 0.0 };
+        let ghost_depth_pipeline = pipeline(
+            "ghost depth",
+            "vs_tile",
+            "fs_tile",
+            &buffers,
+            COLOR_FORMAT,
+            None,
+            ColorWrites::empty(),
+            depth(true, LessEqual, ghost_bias),
+            msaa,
+        );
+        let ghost_pipeline = pipeline(
+            "ghosts",
+            "vs_tile",
+            "fs_tile",
+            &buffers,
+            COLOR_FORMAT,
+            blend,
+            all,
+            depth(false, LessEqual, ghost_bias),
+            msaa,
+        );
+        let mask_pipeline = pipeline(
+            "selection",
+            "vs_tile",
+            "fs_mask",
+            &buffers,
+            MASK,
+            None,
+            all,
+            None,
+            wgpu::MultisampleState::default(),
+        );
         // The ground layers are drawn in order with depth writes off, so they
         // never fight each other at a distance (the Python version needed a
         // polygon offset for that)
+        let ground = depth(false, Always, no_bias);
         let ground_pipeline =
-            pipeline("ground", "vs_ground", "fs_ground", &[], COLOR_FORMAT, None, depth(false, Always), msaa);
+            pipeline("ground", "vs_ground", "fs_ground", &[], COLOR_FORMAT, None, all, ground.clone(), msaa);
         let image_pipeline =
-            pipeline("battle map", "vs_image", "fs_image", &[], COLOR_FORMAT, blend, depth(false, Always), msaa);
-        let grid_pipeline =
-            pipeline("grid", "vs_ground", "fs_grid", &[], COLOR_FORMAT, blend, depth(false, Always), msaa);
+            pipeline("battle map", "vs_image", "fs_image", &[], COLOR_FORMAT, blend, all, ground.clone(), msaa);
+        let grid_pipeline = pipeline("grid", "vs_ground", "fs_grid", &[], COLOR_FORMAT, blend, all, ground, msaa);
         let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("composite"),
             layout: Some(&composite_pl),
@@ -374,6 +423,7 @@ impl Renderer {
             meshes: HashMap::new(),
             placeholder,
             tile_pipeline,
+            ghost_depth_pipeline,
             ghost_pipeline,
             mask_pipeline,
             ground_pipeline,
@@ -673,9 +723,13 @@ impl Renderer {
             for g in &list.tiles {
                 self.draw_group(&mut pass, target, g, &mut stats);
             }
-            pass.set_pipeline(&self.ghost_pipeline);
-            for g in &list.ghosts {
-                self.draw_group(&mut pass, target, g, &mut stats);
+            if !list.ghosts.is_empty() {
+                for pipeline in [&self.ghost_depth_pipeline, &self.ghost_pipeline] {
+                    pass.set_pipeline(pipeline);
+                    for g in &list.ghosts {
+                        self.draw_group(&mut pass, target, g, &mut stats);
+                    }
+                }
             }
         }
         {

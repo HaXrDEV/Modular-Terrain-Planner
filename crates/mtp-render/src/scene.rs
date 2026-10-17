@@ -22,15 +22,22 @@ pub enum DrawKind {
     Ghost,
     /// Preview of one that would be refused: red and hatched.
     RefusedGhost,
+    /// A tile on a level below the one being edited, this many levels down
+    /// (1 or more). Drawn like a ghost, and a little further back for each
+    /// level down, so levels in the same place don't fight.
+    Faded(u8),
 }
 
 impl DrawKind {
+    /// The shader's code: 0 tile, 1 ghost, 2 refused ghost, 3 placeholder,
+    /// and 3 + levels down for faded tiles.
     fn code(self, placeholder: bool) -> f32 {
         match (self, placeholder) {
             (Self::Tile, false) => 0.0,
             (Self::Tile, true) => 3.0,
             (Self::Ghost, _) => 1.0,
             (Self::RefusedGhost, _) => 2.0,
+            (Self::Faded(down), _) => 3.0 + f32::from(down.max(1)),
         }
     }
 }
@@ -123,6 +130,26 @@ fn choose(
     (drawn, Some(ideal))
 }
 
+/// Instances grouped by mesh, in the order each mesh first comes up, so
+/// the draw order is the same every frame. Ghosts are translucent and
+/// blend in draw order; a `HashMap`'s order changes from one map to the
+/// next, which made overlapping faded levels flicker.
+#[derive(Default)]
+struct Groups<T> {
+    order: Vec<(MeshRef, T)>,
+    index: HashMap<MeshRef, usize>,
+}
+
+impl<T: Default> Groups<T> {
+    fn entry(&mut self, mesh: MeshRef) -> &mut T {
+        let i = *self.index.entry(mesh.clone()).or_insert_with(|| {
+            self.order.push((mesh, T::default()));
+            self.order.len() - 1
+        });
+        &mut self.order[i].1
+    }
+}
+
 pub fn build(
     view_proj: Mat4,
     viewport: Vec2,
@@ -132,8 +159,8 @@ pub fn build(
     lod_bias: f32,
 ) -> DrawList {
     let planes = frustum_planes(&view_proj);
-    let mut buckets: HashMap<MeshRef, (Vec<Instance>, Vec<Instance>)> = HashMap::new();
-    let mut ghost_buckets: HashMap<MeshRef, Vec<Instance>> = HashMap::new();
+    let mut buckets: Groups<(Vec<Instance>, Vec<Instance>)> = Groups::default();
+    let mut ghost_buckets: Groups<Vec<Instance>> = Groups::default();
     let mut wanted: HashSet<(TileKey, usize)> = HashSet::new();
 
     let mut classify = |t: &DrawTile| -> Option<(MeshRef, Instance)> {
@@ -174,7 +201,7 @@ pub fn build(
 
     for t in tiles {
         if let Some((mesh, inst)) = classify(t) {
-            let entry = buckets.entry(mesh).or_default();
+            let entry = buckets.entry(mesh);
             entry.0.push(inst);
             if t.selected {
                 entry.1.push(inst);
@@ -183,7 +210,7 @@ pub fn build(
     }
     for t in ghosts {
         if let Some((mesh, inst)) = classify(t) {
-            ghost_buckets.entry(mesh).or_default().push(inst);
+            ghost_buckets.entry(mesh).push(inst);
         }
     }
 
@@ -194,11 +221,11 @@ pub fn build(
             instances.extend(items);
         }
     };
-    for (mesh, (all, selected)) in buckets {
+    for (mesh, (all, selected)) in buckets.order {
         push(&mut list.tiles, &mut list.instances, mesh.clone(), all);
         push(&mut list.selection, &mut list.instances, mesh, selected);
     }
-    for (mesh, items) in ghost_buckets {
+    for (mesh, items) in ghost_buckets.order {
         push(&mut list.ghosts, &mut list.instances, mesh, items);
     }
     let mut wanted: Vec<_> = wanted.into_iter().collect();
@@ -317,5 +344,23 @@ mod tests {
         assert!(list.tiles.iter().any(|g| g.mesh == MeshRef::Placeholder));
         assert_eq!(list.selection.iter().map(|g| g.count).sum::<u32>(), 1);
         assert!(list.wanted.iter().all(|(k, _)| k == &TileKey::new("a.stl")));
+    }
+
+    #[test]
+    fn groups_come_in_the_order_of_their_tiles() {
+        // Ghosts are translucent and blend in draw order, so an order that
+        // changed from frame to frame made overlapping faded levels flicker
+        let cam = Camera::for_grid(20, 20, Projection::TopDown);
+        let vp = cam.view_proj(1.0);
+        let keys: Vec<String> = (0..8).map(|i| format!("k{i}.stl")).collect();
+        let source = Source(keys.iter().map(|k| (TileKey::new(k), (vec![100], vec![true]))).collect());
+        let tiles: Vec<DrawTile> = keys.iter().enumerate().map(|(i, k)| tile(k, 2.0 * i as f32)).collect();
+        let ghosts: Vec<DrawTile> =
+            tiles.iter().rev().map(|t| DrawTile { kind: DrawKind::Ghost, ..t.clone() }).collect();
+        let list = build(vp, Vec2::new(800.0, 800.0), &tiles, &ghosts, &source, 1.0);
+        let order = |groups: &[DrawGroup]| groups.iter().map(|g| g.mesh.clone()).collect::<Vec<_>>();
+        let expected = |ts: &[DrawTile]| ts.iter().map(|t| MeshRef::Tier(t.key.clone(), 0)).collect::<Vec<_>>();
+        assert_eq!(order(&list.tiles), expected(&tiles));
+        assert_eq!(order(&list.ghosts), expected(&ghosts));
     }
 }

@@ -73,7 +73,11 @@ The renderer draws into offscreen textures that the UI shows:
    closest to a quarter of the pixels it covers, and only tiers that are drawn
    are uploaded. A coarser tier on the GPU stands in until a finer one
    arrives. Tiles whose STL isn't loaded are drawn as hatched boxes.
-3. Ghosts for placements and moves, red and hatched when refused.
+3. Ghosts for placements and moves (red and hatched when refused), and the
+   faded levels below the one being edited. They draw depth first, then
+   colour only where each is nearest, so overlaps show one see-through layer
+   in any draw order. A depth bias keeps them behind a tile in the same
+   place, a little more for each level down.
 4. The selection, into a mask that a last pass turns into an outline.
 
 Only features every backend has are used, so the OpenGL fallback works: per

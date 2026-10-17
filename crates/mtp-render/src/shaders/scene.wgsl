@@ -21,13 +21,16 @@ struct InstanceIn {
     @location(2) offset: vec3<f32>,
     @location(3) rot: f32,
     @location(4) scale: vec3<f32>,
-    // 0 tile, 1 ghost, 2 refused ghost, 3 placeholder for a missing STL
+    // 0 tile, 1 ghost, 2 refused ghost, 3 placeholder for a missing STL,
+    // 3 + n a faded tile n levels below the one being edited
     @location(5) kind: f32,
     @location(6) color: vec4<f32>,
 };
 
+// Ghosts draw a depth pass, then a colour pass that must land on exactly
+// the same depths
 struct TileOut {
-    @builtin(position) clip: vec4<f32>,
+    @invariant @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) kind: f32,
@@ -42,6 +45,10 @@ fn rot_z(p: vec2<f32>, a: f32) -> vec2<f32> {
     return vec2<f32>(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
+// Depth added per level down for faded tiles, in normalised depth. Far
+// below what separates real surfaces at any zoom, far above rounding.
+const FADED_DEPTH_STEP: f32 = 2e-6;
+
 // The model transform shared with picking and the Python version: turn
 // inside the unit square, scale to the turned footprint, move into place.
 @vertex
@@ -51,6 +58,11 @@ fn vs_tile(v: VertexIn, i: InstanceIn) -> TileOut {
     let n = vec3<f32>(rot_z(v.normal.xy, i.rot), v.normal.z) / i.scale;
     var out: TileOut;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
+    // Faded levels sit a little further back for each level down, so a
+    // level and the one under it, drawn in the same place, never fight
+    if i.kind > 3.5 {
+        out.clip.z += (i.kind - 3.0) * FADED_DEPTH_STEP * out.clip.w;
+    }
     out.normal = normalize(n);
     out.color = i.color;
     out.kind = i.kind;
@@ -81,7 +93,7 @@ fn fs_tile(in: TileOut, @builtin(front_facing) front: bool) -> @location(0) vec4
     }
     // Refused ghosts and missing tiles are hatched, so colour isn't the
     // only signal
-    if in.kind > 1.5 {
+    if in.kind > 1.5 && in.kind < 3.5 {
         let stripe = fract((in.clip.x + in.clip.y) / (10.0 * g.grid.w));
         if stripe < 0.5 {
             rgb = rgb * 0.55;
