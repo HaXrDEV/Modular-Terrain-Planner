@@ -7,6 +7,8 @@ pub mod document;
 pub mod footprint;
 pub mod grid;
 pub mod history;
+pub mod persist;
+pub mod project;
 pub mod rules;
 pub mod tile;
 pub mod units;
