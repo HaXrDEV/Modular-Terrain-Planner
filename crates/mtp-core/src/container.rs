@@ -62,6 +62,48 @@ pub fn read_container(reader: impl Read + Seek) -> Result<ProjectFile, ProjectEr
     Ok(file)
 }
 
+/// A file's size and CRC32, as a ZIP stores them for each entry, so a file
+/// on disk can be compared with its copy inside without unpacking the copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Fingerprint {
+    pub size: u64,
+    pub crc32: u32,
+}
+
+impl Fingerprint {
+    pub fn of(bytes: &[u8]) -> Self {
+        Self { size: bytes.len() as u64, crc32: crc32fast::hash(bytes) }
+    }
+
+    /// Reads a file through once.
+    pub fn of_file(path: &Path) -> io::Result<Self> {
+        let mut file = File::open(path)?;
+        let mut hasher = crc32fast::Hasher::new();
+        let mut buf = vec![0; 1 << 16];
+        let mut size = 0;
+        loop {
+            let n = match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            hasher.update(&buf[..n]);
+            size += n as u64;
+        }
+        Ok(Self { size, crc32: hasher.finalize() })
+    }
+
+    /// Whether the file at `path` has these contents. A different size
+    /// answers without reading it.
+    pub fn matches_file(&self, path: &Path) -> io::Result<bool> {
+        if std::fs::metadata(path)?.len() != self.size {
+            return Ok(false);
+        }
+        Ok(Self::of_file(path)? == *self)
+    }
+}
+
 /// The STL files inside one container, kept open while several are read.
 pub struct Embedded<R: Read + Seek> {
     zip: ZipArchive<R>,
@@ -78,51 +120,79 @@ impl<R: Read + Seek> Embedded<R> {
         Ok(Self { zip: ZipArchive::new(reader).map_err(io::Error::other)? })
     }
 
-    /// One entry's bytes.
+    /// One entry's bytes. `zip` checks them against the entry's CRC32, so a
+    /// damaged entry is an error rather than a wrong file.
     pub fn read(&mut self, entry: &str) -> io::Result<Vec<u8>> {
         let mut file = self.zip.by_name(entry).map_err(io::Error::other)?;
         let mut out = Vec::with_capacity(usize::try_from(file.size()).unwrap_or(0));
         file.read_to_end(&mut out)?;
         Ok(out)
     }
-}
 
-/// Writes a container: the project, then each embedded STL file, asking
-/// `bytes_of` for one at a time so they're never all in memory. `compress`
-/// trades time for size (autosaves store them as they are).
-pub fn write_to<W: Write + Seek>(
-    out: W,
-    file: &ProjectFile,
-    app_version: &str,
-    compress: bool,
-    mut bytes_of: impl FnMut(&EmbeddedRecord) -> io::Result<Vec<u8>>,
-) -> io::Result<W> {
-    let mut zip = ZipWriter::new(out);
-    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    let stl_options =
-        if compress { deflated } else { SimpleFileOptions::default().compression_method(CompressionMethod::Stored) };
-    zip.start_file(PROJECT_ENTRY, deflated).map_err(io::Error::other)?;
-    zip.write_all(project::write(file, app_version).as_bytes())?;
-    for record in &file.embedded {
-        let bytes = bytes_of(record)?;
-        // STL files over 4 GiB need ZIP64
-        let options = stl_options.large_file(bytes.len() as u64 >= u64::from(u32::MAX));
-        zip.start_file(&record.entry, options).map_err(io::Error::other)?;
-        zip.write_all(&bytes)?;
+    /// An entry's size and CRC32, from the container's directory.
+    pub fn fingerprint(&self, entry: &str) -> Option<Fingerprint> {
+        let data = self.zip.by_index_data(self.zip.index_for_name(entry)?).ok()?;
+        Some(Fingerprint { size: data.size(), crc32: data.crc32() })
     }
-    zip.finish().map_err(io::Error::other)
+
+    /// Whether an entry is compressed rather than stored as it is.
+    pub fn is_compressed(&self, entry: &str) -> Option<bool> {
+        let data = self.zip.by_index_data(self.zip.index_for_name(entry)?).ok()?;
+        Some(data.compression() != CompressionMethod::Stored)
+    }
 }
 
-/// [`write_to`] in memory, with `stls` in the order of `file.embedded`.
+/// Writes a container one STL file at a time, so they're never all in
+/// memory. The project goes in last, by [`Writer::finish`].
+pub struct Writer<W: Write + Seek> {
+    zip: ZipWriter<W>,
+    stl: SimpleFileOptions,
+}
+
+impl<W: Write + Seek> Writer<W> {
+    /// `compress` trades time for size (autosaves store new STL files as
+    /// they are).
+    pub fn new(out: W, compress: bool) -> Self {
+        let method = if compress { CompressionMethod::Deflated } else { CompressionMethod::Stored };
+        Self { zip: ZipWriter::new(out), stl: SimpleFileOptions::default().compression_method(method) }
+    }
+
+    /// Adds an STL file.
+    pub fn add(&mut self, entry: &str, bytes: &[u8]) -> io::Result<()> {
+        // Files over 4 GiB need ZIP64
+        let options = self.stl.large_file(bytes.len() as u64 >= u64::from(u32::MAX));
+        self.zip.start_file(entry, options).map_err(io::Error::other)?;
+        self.zip.write_all(bytes)
+    }
+
+    /// Copies an entry of another container as it is stored there, as
+    /// `as_entry`: no unpacking and packing again, so an unchanged file
+    /// costs no more than copying its bytes.
+    pub fn copy<R: Read + Seek>(&mut self, from: &mut Embedded<R>, entry: &str, as_entry: &str) -> io::Result<()> {
+        let index = from.zip.index_for_name(entry).ok_or_else(|| io::Error::other(format!("{entry} isn't there")))?;
+        let file = from.zip.by_index_raw(index).map_err(io::Error::other)?;
+        self.zip.raw_copy_file_rename(file, as_entry).map_err(io::Error::other)
+    }
+
+    /// Adds the project, listing what was added, and finishes the container.
+    pub fn finish(mut self, file: &ProjectFile, app_version: &str) -> io::Result<W> {
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        self.zip.start_file(PROJECT_ENTRY, deflated).map_err(io::Error::other)?;
+        self.zip.write_all(project::write(file, app_version).as_bytes())?;
+        self.zip.finish().map_err(io::Error::other)
+    }
+}
+
+/// A whole container in memory, with `stls` in the order of `file.embedded`.
 pub fn write(file: &ProjectFile, app_version: &str, stls: &[Vec<u8>], compress: bool) -> io::Result<Vec<u8>> {
     if stls.len() != file.embedded.len() {
         return Err(io::Error::other("an embedded STL file has no bytes"));
     }
-    let mut next = stls.iter();
-    let out = write_to(Cursor::new(Vec::new()), file, app_version, compress, |_| {
-        next.next().cloned().ok_or_else(|| io::Error::other("an embedded STL file has no bytes"))
-    })?;
-    Ok(out.into_inner())
+    let mut out = Writer::new(Cursor::new(Vec::new()), compress);
+    for (record, bytes) in file.embedded.iter().zip(stls) {
+        out.add(&record.entry, bytes)?;
+    }
+    Ok(out.finish(file, app_version)?.into_inner())
 }
 
 /// Lists every STL file the tiles use in `file.embedded`, once each, under
@@ -243,6 +313,60 @@ mod tests {
         let compressed = write(&file, "0.5.0", &stls, true).expect("write").len();
         let stored = write(&file, "0.5.0", &stls, false).expect("write").len();
         assert!(compressed < stored);
+    }
+
+    #[test]
+    fn copied_entries_keep_their_bytes_and_crc() {
+        let mut file = project();
+        name_entries(&mut file);
+        let stls: Vec<Vec<u8>> = (0..file.embedded.len())
+            .map(|i| {
+                format!(
+                    "solid {i}
+endsolid
+"
+                )
+                .repeat(200)
+                .into_bytes()
+            })
+            .collect();
+        let first = write(&file, "0.5.0", &stls, true).expect("write");
+        let mut from = Embedded::new(Cursor::new(&first)).expect("open");
+
+        // As an autosave does: an unchanged file copied as it is, a new one stored
+        let mut out = Writer::new(Cursor::new(Vec::new()), false);
+        let renamed = "stl/Tiles/renamed.stl";
+        out.copy(&mut from, &file.embedded[0].entry, renamed).expect("copy");
+        out.add(&file.embedded[1].entry, &stls[1]).expect("add");
+        let mut listed = file.clone();
+        listed.embedded.truncate(2);
+        listed.embedded[0].entry = renamed.into();
+        let second = out.finish(&listed, "0.5.0").expect("finish").into_inner();
+
+        let mut inside = Embedded::new(Cursor::new(&second)).expect("open");
+        assert_eq!(inside.read(renamed).expect("copied"), stls[0]);
+        assert_eq!(inside.fingerprint(renamed), Some(Fingerprint::of(&stls[0])));
+        assert_eq!(inside.fingerprint(renamed), from.fingerprint(&file.embedded[0].entry));
+        assert_eq!(inside.is_compressed(renamed), Some(true), "still compressed, as it was");
+        assert_eq!(inside.is_compressed(&file.embedded[1].entry), Some(false));
+        let read = read_container(Cursor::new(&second)).expect("read");
+        assert_eq!(read.embedded, listed.embedded);
+        assert!(read.warnings.is_empty(), "{:?}", read.warnings);
+    }
+
+    #[test]
+    fn files_on_disk_compare_by_size_then_crc() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("floor.stl");
+        std::fs::write(&path, b"solid floor").expect("write");
+        let fp = Fingerprint::of(b"solid floor");
+        assert_eq!(Fingerprint::of_file(&path).expect("read"), fp);
+        assert!(fp.matches_file(&path).expect("read"));
+        std::fs::write(&path, b"solid FLOOR").expect("same size, other bytes");
+        assert!(!fp.matches_file(&path).expect("read"));
+        std::fs::write(&path, b"solid floor 2").expect("other size");
+        assert!(!fp.matches_file(&path).expect("read"));
+        assert!(fp.matches_file(&dir.path().join("gone.stl")).is_err());
     }
 
     #[test]

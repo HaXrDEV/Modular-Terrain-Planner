@@ -13,6 +13,7 @@ use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
 use mtp_core::document::Document;
 use mtp_core::footprint::Turn;
 use mtp_core::grid::GridSize;
+use mtp_core::history::SaveToken;
 use mtp_core::rules::Mode;
 use mtp_core::tile::{PlacedId, TileKey};
 use mtp_render::scene::TierSource;
@@ -25,6 +26,7 @@ use crate::exports::{self, ExportKind};
 use crate::files::{self, Autosave, PendingOpen};
 use crate::library::{self, EmbeddedTile, FolderId, Library};
 use crate::panels::{self, LibraryPanel, Problem, Request};
+use crate::saving::{self, Kind};
 use crate::settings::{APP_NAME, Backend, Paths, SessionFolder, Settings, ThemeChoice, VERSION};
 use crate::viewport::{ViewCtx, Viewport};
 
@@ -116,6 +118,17 @@ pub struct App {
     session: String,
     /// The STL files inside the open project.
     embedded: EmbeddedStore,
+    /// The save or autosave being written; one at a time.
+    saving: Option<saving::Job>,
+    /// What to carry on with once the save in progress is written.
+    after_save: Option<After>,
+    /// Save again once the save in progress is written (Save was chosen
+    /// while it ran).
+    save_again: bool,
+    /// Counts the documents opened, so a save finishing after its document
+    /// was replaced leaves the new one alone.
+    generation: u64,
+    repaint: Arc<dyn Fn() + Send + Sync>,
     /// The autosave this window wrote, the only one it may delete.
     own_autosave: Option<PathBuf>,
     /// Files given at startup, opened once the recovery question is answered.
@@ -134,7 +147,7 @@ impl App {
         let renderer = Renderer::new(render_state.device.clone(), render_state.queue.clone());
         let ctx = cc.egui_ctx.clone();
         let repaint: Arc<dyn Fn() + Send + Sync> = Arc::new(move || ctx.request_repaint());
-        let library = Library::new(Some(paths.mesh_cache()), u64::from(settings.mesh_cache_mb) << 20, repaint);
+        let library = Library::new(Some(paths.mesh_cache()), u64::from(settings.mesh_cache_mb) << 20, repaint.clone());
 
         let mut dock = DockState::new(vec![Tab::View]);
         let tree = dock.main_surface_mut();
@@ -188,6 +201,11 @@ impl App {
             },
             own_autosave: None,
             embedded: EmbeddedStore::default(),
+            saving: None,
+            after_save: None,
+            save_again: false,
+            generation: 0,
+            repaint,
             image_shown: None,
             deferred_open: Vec::new(),
             incoming: startup.incoming.as_ref().map(|i| {
@@ -236,7 +254,11 @@ impl App {
     // ---- Files ------------------------------------------------------------
 
     fn guard(&mut self, after: After) {
-        if self.editor.doc.is_dirty() {
+        if self.saving.is_some() {
+            // The project can't be replaced or closed halfway through a save
+            self.after_save = Some(after);
+            self.editor.tell("Finishing the save first…");
+        } else if self.editor.doc.is_dirty() {
             self.dialog = Some(Dialog::Unsaved(after));
         } else {
             self.proceed(after);
@@ -287,6 +309,7 @@ impl App {
         let view = self.editor.level_view;
         self.editor = editor;
         self.editor.level_view = view;
+        self.generation += 1;
         self.editor.changed();
         self.discard_own_autosave();
         self.load_ground_image();
@@ -353,7 +376,18 @@ impl App {
         self.editor.tell(format!("Opened {}.", self.editor.title()));
     }
 
+    /// Starts saving on a worker thread, asking where first for a new project
+    /// or with `choose`. Returns whether a save started.
     fn save(&mut self, choose: bool) -> bool {
+        if self.saving.is_some() {
+            if choose {
+                self.editor.warn("Wait for the save in progress to finish.");
+            } else {
+                self.save_again = true;
+                self.editor.tell("Saving again when the save in progress is done.");
+            }
+            return false;
+        }
         let path = match (&self.editor.path, choose) {
             (Some(p), false) => p.clone(),
             _ => {
@@ -367,32 +401,67 @@ impl App {
                 }
             }
         };
-        match files::save_project(&self.editor.doc, &self.library, &self.embedded, &path) {
-            Ok(saved) => {
-                self.editor.doc.mark_saved();
-                self.editor.path = Some(path.clone());
-                self.settings.add_recent_project(&path.to_string_lossy());
-                self.discard_own_autosave();
-                // From now on the copies inside are read from the new file
-                let keys = saved.embedded.iter().map(|(k, _)| k.clone()).collect();
-                self.embedded = EmbeddedStore::in_archive(&path, saved.embedded);
-                self.library.set_embedded(keys);
-                let note = match saved.missing.len() {
-                    0 => String::new(),
-                    n => format!(
-                        " {n} STL {} aren't on this computer, so {} saved without them.",
-                        if n == 1 { "file" } else { "files" },
-                        if n == 1 { "its tiles are" } else { "their tiles are" }
-                    ),
-                };
-                self.editor.tell(format!("Saved {}.{note}", path.display()));
-                true
-            }
-            Err(e) => {
-                self.dialog = Some(Dialog::Message { title: "Couldn't save".into(), text: e });
-                false
-            }
+        let plan = files::plan_save(self.editor.doc.state(), &self.library, &self.embedded, &path);
+        let kind = Kind::Save { path, token: self.editor.doc.save_token() };
+        self.saving = Some(saving::Job::start(kind, plan, self.generation, self.repaint.clone()));
+        true
+    }
+
+    /// Saves, then carries on with `after` once the save is written.
+    fn save_then(&mut self, after: After) {
+        let busy = self.saving.is_some();
+        if self.save(false) || busy {
+            self.after_save = Some(after);
         }
+    }
+
+    /// Takes in a save or autosave the worker thread finished.
+    fn poll_save(&mut self) {
+        let Some(result) = self.saving.as_ref().and_then(saving::Job::finished) else { return };
+        let Some(job) = self.saving.take() else { return };
+        let current = job.generation == self.generation;
+        match (job.kind, result) {
+            (Kind::Save { path, token }, Ok(saved)) if current => self.saved(path, token, saved),
+            (Kind::Save { path, .. }, Ok(_)) => self.editor.tell(format!("Saved {}.", path.display())),
+            (Kind::Save { .. }, Err(e)) => {
+                self.after_save = None;
+                self.save_again = false;
+                self.dialog = Some(Dialog::Message { title: "Couldn't save".into(), text: e });
+            }
+            (Kind::Autosave { file, .. }, Ok(_)) if current => {
+                tracing::info!("autosaved to {}", file.display());
+                self.own_autosave = Some(file);
+            }
+            // Its project was closed meanwhile
+            (Kind::Autosave { file, .. }, Ok(_)) => files::discard_autosave_file(&file),
+            (Kind::Autosave { .. }, Err(e)) => self.problem(format!("Autosave failed: {e}")),
+        }
+        if std::mem::take(&mut self.save_again) && self.editor.doc.is_dirty() {
+            self.save(false);
+        }
+        if let Some(after) = self.after_save.take() {
+            self.guard(after);
+        }
+    }
+
+    fn saved(&mut self, path: PathBuf, token: SaveToken, saved: files::Saved) {
+        self.editor.doc.mark_saved_at(token);
+        self.editor.path = Some(path.clone());
+        self.settings.add_recent_project(&path.to_string_lossy());
+        self.discard_own_autosave();
+        // From now on the copies inside are read from the new file
+        let keys = saved.embedded.iter().map(|(k, _)| k.clone()).collect();
+        self.embedded = EmbeddedStore::in_archive(&path, saved.embedded);
+        self.library.set_embedded(keys);
+        let note = match saved.missing.len() {
+            0 => String::new(),
+            n => format!(
+                " {n} STL {} aren't on this computer, so {} saved without them.",
+                if n == 1 { "file" } else { "files" },
+                if n == 1 { "its tiles are" } else { "their tiles are" }
+            ),
+        };
+        self.editor.tell(format!("Saved {}.{note}", path.display()));
     }
 
     /// Swaps in the STL files of the project now open, and their section in
@@ -410,6 +479,10 @@ impl App {
     /// File > Export STL files: one copy of each STL file the layout uses,
     /// named as in the print list, into a new folder.
     fn export_stls(&mut self) {
+        if self.saving.is_some() {
+            self.editor.warn("Wait for the save in progress to finish.");
+            return;
+        }
         if self.editor.doc.tiles().is_empty() {
             self.dialog =
                 Some(Dialog::Message { title: "Nothing to export".into(), text: "Place some tiles first.".into() });
@@ -453,17 +526,20 @@ impl App {
         if every.is_zero() || self.last_autosave.elapsed() < every {
             return;
         }
+        // Not halfway through a save, nor while a dialog's answer may
+        // replace the project
+        if self.saving.is_some() || self.quitting || self.dialog.is_some() {
+            return;
+        }
         self.last_autosave = Instant::now();
         if self.editor.doc.is_dirty() {
-            let dir = self.paths.autosave();
-            let original = self.editor.path.as_deref();
-            match files::autosave(&dir, &self.session, &self.editor.doc, &self.library, &self.embedded, original) {
-                Ok(p) => {
-                    tracing::info!("autosaved to {}", p.display());
-                    self.own_autosave = Some(p);
-                }
-                Err(e) => self.problem(format!("Autosave failed: {e}")),
-            }
+            let original = self.editor.path.clone();
+            let file = files::autosave_file(&self.paths.autosave(), &self.session, original.as_deref());
+            // Paths are worked out against the original, so recovering keeps them
+            let against = original.clone().unwrap_or_else(|| file.clone());
+            let plan = files::plan_save(self.editor.doc.state(), &self.library, &self.embedded, &against);
+            let kind = Kind::Autosave { file, original };
+            self.saving = Some(saving::Job::start(kind, plan, self.generation, self.repaint.clone()));
         }
     }
 
@@ -1099,6 +1175,17 @@ impl App {
                 {
                     let _ = self.dock.set_active_tab(tab);
                 }
+                if let Some(job) = &self.saving {
+                    let text = match job.kind {
+                        Kind::Save { .. } if job.total > 0 => {
+                            format!("Saving: {} of {} STL files", job.done(), job.total)
+                        }
+                        Kind::Save { .. } => "Saving…".to_owned(),
+                        Kind::Autosave { .. } => "Autosaving…".to_owned(),
+                    };
+                    ui.label(text);
+                    ui.spinner();
+                }
                 if let Some((done, total, name)) = self.library.progress() {
                     if ui.small_button("Cancel").clicked() {
                         self.library.cancel_all();
@@ -1146,11 +1233,7 @@ impl App {
                     ui.horizontal(|ui| {
                         if ui.button("Save").clicked() {
                             let after = after.clone();
-                            then = Some(Box::new(move |app: &mut Self| {
-                                if app.save(false) {
-                                    app.proceed(after);
-                                }
-                            }));
+                            then = Some(Box::new(move |app: &mut Self| app.save_then(after)));
                             keep = false;
                         }
                         if ui.button("Don't save").clicked() {
@@ -1876,6 +1959,7 @@ impl eframe::App for App {
         if self.frames.is_multiple_of(300) {
             self.evict_unused();
         }
+        self.poll_save();
         self.handle_drops(&ctx);
         self.shortcuts(&ctx);
         // Undo and redo can bring back, remove or swap the battle map
@@ -1905,14 +1989,19 @@ impl eframe::App for App {
         self.update_title(&ctx);
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
-            if self.editor.doc.is_dirty() {
+            if self.saving.is_some() {
+                // Closes once the save is written
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.guard(After::Quit);
+            } else if self.editor.doc.is_dirty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.dialog = Some(Dialog::Unsaved(After::Quit));
             } else {
                 self.quitting = true;
             }
         }
-        if self.quitting {
+        // A save in progress is finished first
+        if self.quitting && self.saving.is_none() {
             // Screenshot runs leave the user's settings and autosaves alone
             if self.screenshot.is_none() {
                 self.remember_session();

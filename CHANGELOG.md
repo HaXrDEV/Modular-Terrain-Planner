@@ -13,6 +13,8 @@ still opens.
   layers, so a project opens complete on another computer. The library
   lists them under In this project, and File > Export STL files writes
   them out for printing.
+- Saving runs in the background, and saving again only packs the STL
+  files that changed, so it's quick.
 
 ## 0.5.0 (unreleased)
 

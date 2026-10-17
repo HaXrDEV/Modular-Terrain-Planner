@@ -69,6 +69,17 @@ the tile list) with a mark for the saved state, so undoing back to it clears
 the unsaved star. When a tile's STL loads after a project was opened, its real
 size is written into every undo step, so undo can't bring back the guess.
 
+## Saving
+
+A save is planned on the UI thread (the project file, and where each STL
+file inside it comes from) and written on a worker thread, with progress in
+the status bar. An STL file is copied across from the project being replaced
+as it is stored there, without unpacking and packing it again, when the file
+on disk has the same size and CRC32 or isn't on this computer. So saving
+again only packs what changed. The saved mark goes on the state the save
+started from, so edits made while it's written stay unsaved. One save runs
+at a time: quitting waits for it and autosave skips its turn.
+
 ## Drawing
 
 The renderer draws into offscreen textures that the UI shows:

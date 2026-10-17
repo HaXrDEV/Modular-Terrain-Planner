@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::footprint::{self, Turn};
 use crate::grid::{CellIndex, GridSize};
-use crate::history::History;
+use crate::history::{History, SaveToken};
 use crate::rules::{self, Height, Mode, Proposal, Refusal};
 use crate::tile::{Placed, PlacedId, TileKey};
 use crate::units::TileSize;
@@ -347,6 +347,16 @@ impl Document {
 
     pub fn mark_saved(&mut self) {
         self.history.mark_saved();
+    }
+
+    /// Names the state now, for a save that runs while editing goes on.
+    pub fn save_token(&self) -> SaveToken {
+        self.history.token()
+    }
+
+    /// Marks the state a finished save started from as saved.
+    pub fn mark_saved_at(&mut self, token: SaveToken) {
+        self.history.mark_saved_at(token);
     }
 
     pub fn mark_unsaved(&mut self) {

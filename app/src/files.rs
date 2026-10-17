@@ -3,17 +3,18 @@
 //! use (format 6); every older format still opens.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufWriter, Write};
+use std::fs::File;
+use std::io::{self, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use mtp_core::container;
-use mtp_core::document::{DocState, Document, GroundImage};
+use mtp_core::container::{self, Embedded};
+use mtp_core::document::{DocState, GroundImage};
 use mtp_core::persist::{write_atomic, write_atomic_with};
 use mtp_core::project::{self, LibraryFolder, ProjectFile};
 use mtp_core::tile::TileKey;
 
-use crate::embedded::{self, EmbeddedStore};
+use crate::embedded::{self, EmbeddedStore, Stored};
 use crate::library::{EmbeddedTile, Library};
 use crate::settings::VERSION;
 
@@ -128,9 +129,35 @@ pub struct Saved {
     pub missing: Vec<TileKey>,
 }
 
-/// The project file for `state`, with an entry for every STL file that can
-/// be carried, and the key each entry stands in for.
-fn plan(state: &DocState, library: &Library, store: &EmbeddedStore, path: &Path) -> (ProjectFile, Vec<TileKey>, Saved) {
+/// What a save writes, worked out on the UI thread so that the writing can
+/// happen on another: the project file, and where each STL file inside it
+/// comes from.
+pub struct SavePlan {
+    file: ProjectFile,
+    /// One per record of `file.embedded`.
+    sources: Vec<Source>,
+    saved: Saved,
+}
+
+impl SavePlan {
+    /// How many STL files go inside.
+    pub fn len(&self) -> usize {
+        self.sources.len()
+    }
+}
+
+/// Where one STL file going inside a project comes from.
+struct Source {
+    /// The tile key, which is also the file on disk.
+    key: TileKey,
+    /// Its copy inside the project being replaced, if there is one.
+    stored: Option<Stored>,
+}
+
+/// Plans saving `state` to `path`, with an entry for every STL file that
+/// can be carried: it's on disk, or inside the project being replaced
+/// (`store`).
+pub fn plan_save(state: &DocState, library: &Library, store: &EmbeddedStore, path: &Path) -> SavePlan {
     // Folders that aren't there right now are written back too, so an
     // unplugged drive doesn't change the project
     let open: Vec<LibraryFolder> = library
@@ -146,51 +173,79 @@ fn plan(state: &DocState, library: &Library, store: &EmbeddedStore, path: &Path)
     for (record, tile) in file.tiles.iter().zip(&state.tiles) {
         key_of.entry((record.folder, record.file.as_str())).or_insert(&tile.key);
     }
-    let mut keys = Vec::new();
+    let mut sources = Vec::new();
     let mut saved = Saved::default();
     let mut kept = Vec::new();
     for record in &file.embedded {
-        let Some(key) = key_of.get(&(record.folder, record.file.as_str())) else { continue };
+        let Some(&key) = key_of.get(&(record.folder, record.file.as_str())) else { continue };
         if embedded::available(key, store) {
-            keys.push((*key).clone());
-            saved.embedded.push(((*key).clone(), record.entry.clone()));
+            sources.push(Source { key: key.clone(), stored: store.get(key).cloned() });
+            saved.embedded.push((key.clone(), record.entry.clone()));
             kept.push(record.clone());
         } else {
-            saved.missing.push((*key).clone());
+            saved.missing.push(key.clone());
         }
     }
     file.embedded = kept;
-    (file, keys, saved)
+    SavePlan { file, sources, saved }
 }
 
-/// Writes `state` as a container with its STL files, streamed one at a
-/// time, atomically.
-fn write_project(
-    state: &DocState,
-    library: &Library,
-    store: &EmbeddedStore,
+/// Writes a planned save atomically, keeping the previous file as `.bak`
+/// with `keep_backup`. New and changed STL files are compressed with
+/// `compress`; unchanged ones are copied from the project being replaced as
+/// they are, which is what makes saving again quick. `progress` hears how
+/// many STL files are done.
+pub fn write_save(
+    plan: SavePlan,
     path: &Path,
     keep_backup: bool,
     compress: bool,
+    progress: &dyn Fn(usize),
 ) -> Result<Saved, String> {
-    let (file, keys, saved) = plan(state, library, store, path);
-    let mut next = keys.iter();
+    let SavePlan { file, sources, saved } = plan;
     write_atomic_with(path, keep_backup, |f| {
-        let out = container::write_to(BufWriter::new(f), &file, VERSION, compress, |_| {
-            let key = next.next().ok_or_else(|| std::io::Error::other("an STL file went missing"))?;
-            embedded::bytes(key, store).map_err(|e| std::io::Error::other(format!("{}: {e}", key.as_str())))
-        })?;
-        out.into_inner().map_err(std::io::IntoInnerError::into_error)?.flush()
+        // The containers copies come from, each opened once
+        let mut archives: HashMap<PathBuf, Option<Embedded<File>>> = HashMap::new();
+        let mut out = container::Writer::new(BufWriter::new(f), compress);
+        for (i, (record, source)) in file.embedded.iter().zip(&sources).enumerate() {
+            write_entry(&mut out, &mut archives, &record.entry, source)
+                .map_err(|e| io::Error::other(format!("{}: {e}", source.key.as_str())))?;
+            progress(i + 1);
+        }
+        let out = out.finish(&file, VERSION)?;
+        // Closed before the new file takes the place of the one they read
+        drop(archives);
+        out.into_inner().map_err(io::IntoInnerError::into_error)?.flush()
     })
     .map_err(|e| format!("{} couldn't be saved: {e}", path.display()))?;
     Ok(saved)
 }
 
-/// Saves atomically, keeping the previous file as `.bak`. The STL files
-/// come from disk when they're there, else from `store`, the project being
-/// replaced.
-pub fn save_project(doc: &Document, library: &Library, store: &EmbeddedStore, path: &Path) -> Result<Saved, String> {
-    write_project(doc.state(), library, store, path, true, true)
+/// Writes one STL file into a container: copied as it is from the project
+/// being replaced when the file on disk is the same or isn't there, else
+/// read (from disk when it's there) and added.
+fn write_entry<W: Write + Seek>(
+    out: &mut container::Writer<W>,
+    archives: &mut HashMap<PathBuf, Option<Embedded<File>>>,
+    entry: &str,
+    source: &Source,
+) -> io::Result<()> {
+    let disk = Path::new(source.key.as_str());
+    if let Some(Stored::Archive { path, entry: inside }) = &source.stored
+        && let Some(archive) = archives.entry(path.clone()).or_insert_with(|| Embedded::open(path).ok())
+        // A file on disk that can't be read counts as not there
+        && archive.fingerprint(inside).is_some_and(|fp| fp.matches_file(disk).unwrap_or(true))
+    {
+        return out.copy(archive, inside, entry);
+    }
+    let bytes = match std::fs::read(disk) {
+        Ok(bytes) => bytes,
+        Err(e) => match &source.stored {
+            Some(stored) => stored.read()?,
+            None => return Err(e),
+        },
+    };
+    out.add(entry, &bytes)
 }
 
 /// Adds the extension when the file dialog didn't.
@@ -214,35 +269,31 @@ fn note_path(file: &Path) -> PathBuf {
     file.with_extension("origin")
 }
 
-/// Autosaves `doc`, STL files included (stored, not compressed, so it's
-/// quick). Each session writes its own file (`session` tells them apart),
-/// so one window never overwrites or deletes another's.
-pub fn autosave(
-    dir: &Path,
-    session: &str,
-    doc: &Document,
-    library: &Library,
-    store: &EmbeddedStore,
-    original: Option<&Path>,
-) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+/// The file this window autosaves `original` (or an untitled project) to.
+/// Each session writes its own (`session` tells them apart), so one window
+/// never overwrites or deletes another's.
+pub fn autosave_file(dir: &Path, session: &str, original: Option<&Path>) -> PathBuf {
     let name =
         original.and_then(|p| p.file_stem()).map_or_else(|| "Untitled".into(), |s| s.to_string_lossy().into_owned());
-    let file = dir.join(format!("{name}-{session}.autosave.mtp"));
-    // Paths are worked out against the original, so recovering keeps them
-    let (plan_file, keys, _) = plan(doc.state(), library, store, original.unwrap_or(&file));
-    let mut next = keys.iter();
-    write_atomic_with(&file, false, |f| {
-        let out = container::write_to(BufWriter::new(f), &plan_file, VERSION, false, |_| {
-            let key = next.next().ok_or_else(|| std::io::Error::other("an STL file went missing"))?;
-            embedded::bytes(key, store)
-        })?;
-        out.into_inner().map_err(std::io::IntoInnerError::into_error)?.flush()
-    })
-    .map_err(|e| e.to_string())?;
+    dir.join(format!("{name}-{session}.autosave.mtp"))
+}
+
+/// Writes a planned autosave and its note of which project it belongs to.
+/// Plan it against `original`, so recovering keeps the paths. New STL
+/// files are stored, not compressed, so it's quick.
+pub fn write_autosave(
+    plan: SavePlan,
+    file: &Path,
+    original: Option<&Path>,
+    progress: &dyn Fn(usize),
+) -> Result<Saved, String> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let saved = write_save(plan, file, false, false, progress)?;
     let note = original.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-    write_atomic(&note_path(&file), note.as_bytes(), false).map_err(|e| e.to_string())?;
-    Ok(file)
+    write_atomic(&note_path(file), note.as_bytes(), false).map_err(|e| e.to_string())?;
+    Ok(saved)
 }
 
 pub fn autosaves(dir: &Path) -> Vec<Autosave> {
@@ -366,12 +417,33 @@ pub fn ground_image(path: &Path, rect: [f32; 4]) -> GroundImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mtp_core::document::Document;
     use mtp_core::footprint::Rotation;
     use mtp_core::grid::GridSize;
     use mtp_core::tile::{Placed, PlacedId};
     use std::sync::Arc;
 
     const FLOOR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/stl/good/floor_2x2_mm.stl");
+    const WALL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/stl/good/wall_inch.stl");
+
+    /// Saves as the app does, but on this thread.
+    fn save_project(doc: &Document, library: &Library, store: &EmbeddedStore, path: &Path) -> Result<Saved, String> {
+        write_save(plan_save(doc.state(), library, store, path), path, true, true, &|_| {})
+    }
+
+    fn autosave(
+        dir: &Path,
+        session: &str,
+        doc: &Document,
+        library: &Library,
+        store: &EmbeddedStore,
+        original: Option<&Path>,
+    ) -> Result<PathBuf, String> {
+        let file = autosave_file(dir, session, original);
+        let plan = plan_save(doc.state(), library, store, original.unwrap_or(&file));
+        write_autosave(plan, &file, original, &|_| {})?;
+        Ok(file)
+    }
 
     /// Waits for the library to load what it was given.
     fn settle(library: &mut Library) {
@@ -444,6 +516,47 @@ mod tests {
         assert_eq!((again.embedded.len(), again.missing.len()), (1, 0));
         let store = embedded_store(&read_project(&path).expect("reopen"));
         assert_eq!(embedded::bytes(&key, &store).expect("still inside"), original);
+    }
+
+    #[test]
+    fn unchanged_files_are_copied_from_the_project_as_they_are() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tiles = dir.path().join("Tiles");
+        std::fs::create_dir(&tiles).expect("folder");
+        let stl = tiles.join("floor.stl");
+        std::fs::copy(FLOOR, &stl).expect("copy");
+        let key = TileKey::from_path(&stl);
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = vec![placed(1, &key, 2.0)];
+        let doc = Document::new(state);
+        let library = Library::new(None, 0, Arc::new(|| {}));
+        let path = dir.path().join("castle.mtp");
+        save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
+        let store = embedded_store(&read_project(&path).expect("reopen"));
+        let inside = |file: &Path| {
+            let mut archive = Embedded::open(file).expect("open");
+            let entry = "stl/Tiles/floor.stl";
+            (archive.is_compressed(entry), archive.read(entry).expect("entry"))
+        };
+
+        // An autosave stores new files, so a compressed one was copied as it was
+        let progress = std::cell::Cell::new(0);
+        let file = autosave_file(dir.path(), "a", Some(&path));
+        let plan = plan_save(doc.state(), &library, &store, &path);
+        assert_eq!(plan.len(), 1);
+        write_autosave(plan, &file, Some(&path), &|n| progress.set(n)).expect("autosave");
+        assert_eq!(progress.get(), 1);
+        assert_eq!(inside(&file), (Some(true), std::fs::read(FLOOR).expect("fixture")));
+
+        // A file changed on disk is read again
+        std::fs::copy(WALL, &stl).expect("change it");
+        autosave(dir.path(), "a", &doc, &library, &store, Some(&path)).expect("autosave");
+        assert_eq!(inside(&file), (Some(false), std::fs::read(WALL).expect("fixture")));
+
+        // With the file gone from disk, saving over the project copies from it
+        std::fs::remove_file(&stl).expect("remove");
+        save_project(&doc, &library, &store, &path).expect("save over the project it copies from");
+        assert_eq!(inside(&path), (Some(true), std::fs::read(FLOOR).expect("fixture")));
     }
 
     #[test]

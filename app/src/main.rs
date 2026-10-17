@@ -15,6 +15,7 @@ mod palette;
 mod panels;
 mod plates;
 mod samples;
+mod saving;
 mod selftest;
 mod settings;
 mod stamps;

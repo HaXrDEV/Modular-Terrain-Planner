@@ -2269,6 +2269,7 @@ dependencies = [
 name = "mtp-core"
 version = "0.5.0"
 dependencies = [
+ "crc32fast",
  "flate2",
  "serde",
  "serde_json",
