@@ -59,6 +59,41 @@ jobs:
       - name: Doc tests
         run: cargo test --workspace --locked --doc
 
+  # Renders real frames on each platform's GPU stack: lavapipe (Vulkan) and
+  # llvmpipe (OpenGL) on Linux, WARP on Windows, Metal on macOS. A shader that
+  # doesn't compile on a backend fails here, not on users' machines.
+  gpu:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            backend: vulkan
+          - os: ubuntu-24.04
+            backend: gl
+          - os: windows-2025
+            backend: dx12
+          - os: macos-15
+            backend: metal
+    runs-on: ${{ matrix.os }}
+    env:
+      MTP_REQUIRE_GPU: 1
+      MTP_SOFTWARE_GPU: ${{ matrix.backend == 'metal' && '0' || '1' }}
+      WGPU_BACKEND: ${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Mesa
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Render tests
+        run: cargo test -p mtp-render --locked --test headless -- --nocapture
+
   # The oldest Rust the workspace says it builds with (rust-version in Cargo.toml)
   msrv:
     runs-on: ubuntu-24.04

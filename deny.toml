@@ -9,6 +9,8 @@ yanked = "deny"
 
 [licenses]
 confidence-threshold = 0.9
+# Some allowed licences only arrive with later dependencies (fonts, images)
+unused-allowed-license = "allow"
 allow = [
     "MIT",
     "MIT-0",

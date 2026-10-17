@@ -1,0 +1,19 @@
+[package]
+name = "mtp-render"
+description = "The wgpu renderer of Modular Terrain Planner: tiles, grid, battle map, selection, picking and thumbnails"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtp-core.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+pollster = "0.4"
+thiserror.workspace = true
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "dx12", "metal", "vulkan", "gles", "parking_lot"] }
+
+[lints]
+workspace = true
