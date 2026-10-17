@@ -459,7 +459,8 @@ impl App {
         self.embedded = EmbeddedStore::in_archive(&path, saved.embedded)
             .with_image(&path, saved.image)
             .with_pins_of(&self.embedded);
-        self.library.set_embedded(keys);
+        let gone = self.library.set_embedded(keys);
+        self.forget(gone);
         let note = match saved.missing.len() {
             0 => String::new(),
             n => format!(
@@ -526,6 +527,41 @@ impl App {
                 open_in_file_manager(&folder);
             }
             Err(e) => self.dialog = Some(Dialog::Message { title: "Couldn't export the STL files".into(), text: e }),
+        }
+    }
+
+    /// Writes the project's STL files that aren't on this computer to a
+    /// folder of the user's choosing, adds it to the library and points the
+    /// layout's tiles at the files there, as one undo step.
+    fn add_project_tiles(&mut self) {
+        if self.saving.is_some() {
+            self.editor.warn("Wait for the save in progress to finish.");
+            return;
+        }
+        let items: Vec<EmbeddedTile> =
+            self.library.embedded_missing().iter().filter_map(|k| self.library.embedded_item(k)).cloned().collect();
+        if items.is_empty() {
+            return;
+        }
+        let mut dialog = rfd::FileDialog::new().set_title("Where to put the project's tiles");
+        if let Some(dir) = self.editor.path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(dir) = dialog.pick_folder() else { return };
+        match files::unpack(&items, &self.embedded, &dir, &self.editor.title()) {
+            Ok((folder, moved)) => {
+                self.library.add_folder(&folder, true);
+                let n = self.editor.doc.repoint("Add tiles to the library", &moved);
+                self.editor.changed();
+                self.editor.tell(format!(
+                    "Wrote {} STL files to {}, added it to the library and moved {n} tiles to them.",
+                    moved.len(),
+                    folder.display()
+                ));
+            }
+            Err(e) => {
+                self.dialog = Some(Dialog::Message { title: "Couldn't add the project's tiles".into(), text: e });
+            }
         }
     }
 
@@ -1602,28 +1638,21 @@ impl App {
     }
 
     fn remove_folder(&mut self, id: FolderId) {
-        // Only tiles no other folder lists leave, so only their thumbnails go
-        let listed_elsewhere =
-            |key: &TileKey| self.library.folders().iter().any(|f| f.id != id && f.tiles.contains(key));
-        let thumbs: Vec<egui::TextureId> = self
-            .library
-            .folder(id)
-            .map(|f| {
-                f.tiles
-                    .iter()
-                    .filter(|k| !listed_elsewhere(k))
-                    .filter_map(|k| self.library.tile(k).and_then(|t| t.thumbnail))
-                    .collect()
-            })
-            .unwrap_or_default();
-        for key in self.library.remove_folder(id) {
-            self.renderer.release_mesh(&key);
-            self.thumb_textures.remove(&key);
-        }
+        let gone = self.library.remove_folder(id);
+        self.forget(gone);
+    }
+
+    /// Frees the meshes and thumbnails of tiles that left the library.
+    fn forget(&mut self, tiles: Vec<library::Tile>) {
         let mut egui_renderer = self.render_state.renderer.write();
-        for t in thumbs {
-            egui_renderer.free_texture(&t);
+        for t in tiles {
+            self.renderer.release_mesh(&t.key);
+            self.thumb_textures.remove(&t.key);
+            if let Some(id) = t.thumbnail {
+                egui_renderer.free_texture(&id);
+            }
         }
+        drop(egui_renderer);
         if let Tool::Place { key, .. } = &self.editor.tool
             && self.library.tile(key).is_none()
         {
@@ -1675,6 +1704,7 @@ impl App {
                         self.problem(e);
                     }
                 }
+                Request::AddProjectTiles => self.add_project_tiles(),
                 Request::SampleTiles => match crate::samples::write(&self.paths.data.join("Sample tiles")) {
                     Ok(dir) => {
                         self.library.add_folder(&dir, false);

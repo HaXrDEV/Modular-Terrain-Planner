@@ -44,7 +44,10 @@ so one STL file in several projects is prepared once. Files on disk are
 compared with their copies (size, then CRC32) when the project opens, and
 the app asks which to use for those that differ. Choosing the project's
 copies pins them: they load from the project, loading their folder again
-doesn't replace them, and saving keeps them.
+doesn't replace them, and saving keeps them. Add to the library, on that
+section, writes the files that aren't on this computer to
+`<project> tiles/<pack>/<file>` in a folder of your choice, adds it to the
+library and points the layout's tiles at them, as one undo step.
 
 ## Placing tiles
 

@@ -158,6 +158,8 @@ pub struct Library {
     /// Files whose copy inside the project is used even though the file
     /// is on disk.
     pinned: HashSet<TileKey>,
+    /// Files in the project's section that aren't on this computer.
+    embedded_missing: HashSet<TileKey>,
 }
 
 impl Library {
@@ -174,6 +176,7 @@ impl Library {
             repaint,
             embedded_items: HashMap::new(),
             pinned: HashSet::new(),
+            embedded_missing: HashSet::new(),
         }
     }
 
@@ -310,7 +313,9 @@ impl Library {
         self.next_id += 1;
         let mut keys: Vec<TileKey> = items.iter().map(|i| i.key.clone()).collect();
         keys.sort_by_key(|k| k.stem().to_lowercase());
-        let to_load = items.iter().filter(|i| !Path::new(i.key.as_str()).is_file()).count();
+        self.embedded_missing =
+            items.iter().filter(|i| !Path::new(i.key.as_str()).is_file()).map(|i| i.key.clone()).collect();
+        let to_load = self.embedded_missing.len();
         self.folders.insert(
             0,
             Folder {
@@ -417,12 +422,31 @@ impl Library {
         }
     }
 
+    /// The project's STL files that weren't on this computer when listed.
+    pub fn embedded_missing(&self) -> &HashSet<TileKey> {
+        &self.embedded_missing
+    }
+
+    /// How the project's section names a file: its pack and its path there.
+    pub fn embedded_item(&self, key: &TileKey) -> Option<&EmbeddedTile> {
+        self.embedded_items.get(key)
+    }
+
     /// After a save: the project's section lists what's inside it now.
-    pub fn set_embedded(&mut self, mut keys: Vec<TileKey>) {
+    /// Returns the tiles that left the library with the files no longer
+    /// inside, so their meshes and thumbnails can go.
+    pub fn set_embedded(&mut self, mut keys: Vec<TileKey>) -> Vec<Tile> {
         keys.sort_by_key(|k| k.stem().to_lowercase());
+        self.embedded_missing = keys.iter().filter(|k| !Path::new(k.as_str()).is_file()).cloned().collect();
         if let Some(f) = self.folders.iter_mut().find(|f| f.embedded) {
-            f.tiles = keys;
-            return;
+            let gone = std::mem::replace(&mut f.tiles, keys);
+            let id = f.id;
+            let orphans: Vec<TileKey> = gone
+                .into_iter()
+                .filter(|k| !self.folders.iter().any(|f| f.tiles.contains(k)))
+                .filter(|k| self.tiles.get(k).is_some_and(|t| t.folder == id))
+                .collect();
+            return orphans.iter().filter_map(|k| self.tiles.remove(k)).collect();
         }
         let id = FolderId(self.next_id);
         self.next_id += 1;
@@ -440,16 +464,18 @@ impl Library {
                 cancel: Arc::new(AtomicBool::new(false)),
             },
         );
+        Vec::new()
     }
 
-    /// Closes a folder; returns the keys of the tiles that left the library.
-    pub fn remove_folder(&mut self, id: FolderId) -> Vec<TileKey> {
+    /// Closes a folder; returns the tiles that left the library.
+    pub fn remove_folder(&mut self, id: FolderId) -> Vec<Tile> {
         let Some(pos) = self.folders.iter().position(|f| f.id == id) else { return Vec::new() };
         let folder = self.folders.remove(pos);
         folder.cancel.store(true, Ordering::Relaxed);
         // With the project's section gone, pinned files come from disk again
         let unpinned: Vec<TileKey> = if folder.embedded {
             self.embedded_items.clear();
+            self.embedded_missing.clear();
             std::mem::take(&mut self.pinned).into_iter().collect()
         } else {
             Vec::new()
@@ -464,10 +490,7 @@ impl Library {
                         t.folder = other.id;
                     }
                 }
-                None => {
-                    self.tiles.remove(&key);
-                    removed.push(key);
-                }
+                None => removed.extend(self.tiles.remove(&key)),
             }
         }
         self.reload_from_disk(unpinned.into_iter().filter(|k| self.tiles.contains_key(k)).collect());
@@ -635,6 +658,29 @@ mod tests {
         // Closing the project brings the file on disk back
         library.remove_folder(section);
         wait(&mut library, |l| l.tile(&key).is_some_and(|t| t.folder == disk && t.size == on_disk));
+    }
+
+    #[test]
+    fn files_no_longer_inside_leave_after_a_save() {
+        let floor = std::path::absolute(Path::new(FIXTURES).join("floor_2x2_mm.stl")).expect("absolute");
+        let key = TileKey::from_path(&floor);
+        let gone = TileKey::new("C:/Gone/Tiles/wall.stl");
+        let item = |key: &TileKey| EmbeddedTile {
+            key: key.clone(),
+            pack: "Tiles".into(),
+            relative: key.file_name().into(),
+            stored: embedded::Stored::Memory(Arc::new(std::fs::read(&floor).expect("fixture"))),
+        };
+        let mut library = Library::new(None, 0, Arc::new(|| {}));
+        library.add_embedded(vec![item(&key), item(&gone)]);
+        wait(&mut library, |l| l.tile(&gone).is_some());
+        assert_eq!(library.embedded_missing(), &HashSet::from([gone.clone()]), "the fixture is on disk");
+        assert_eq!(library.embedded_item(&gone).map(|i| i.pack.as_str()), Some("Tiles"));
+
+        // The layout stopped using the missing file before the save
+        let removed = library.set_embedded(vec![key.clone()]);
+        assert_eq!(removed.iter().map(|t| &t.key).collect::<Vec<_>>(), [&gone]);
+        assert!(library.tile(&gone).is_none() && library.embedded_missing().is_empty());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The open project: grid, placed tiles and battle map, edited only through
 //! methods that apply the placement rules and record one undo step each.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::footprint::{self, Turn};
@@ -222,7 +222,7 @@ impl Document {
         changes: &[(PlacedId, TileKey, TileSize)],
         mode: Mode,
     ) -> Result<(), Refusal> {
-        let map: std::collections::HashMap<PlacedId, (TileKey, TileSize)> =
+        let map: HashMap<PlacedId, (TileKey, TileSize)> =
             changes.iter().map(|(id, k, s)| (*id, (k.clone(), *s))).collect();
         let ids: Vec<PlacedId> = changes.iter().map(|(id, _, _)| *id).collect();
         self.rearrange(
@@ -237,6 +237,22 @@ impl Document {
             mode,
             Height::Settle,
         )
+    }
+
+    /// Points tiles at other STL files, for files that moved, as one undo
+    /// step. Everything else stays as it was, so no rule is asked: the same
+    /// file in another place takes the same room. Returns how many changed.
+    pub fn repoint(&mut self, label: &str, to: &HashMap<TileKey, TileKey>) -> usize {
+        let mut state = (*self.state).clone();
+        let mut changed = 0;
+        for t in &mut state.tiles {
+            if let Some(key) = to.get(&t.key) {
+                t.key = key.clone();
+                changed += 1;
+            }
+        }
+        self.commit(label, state);
+        changed
     }
 
     /// Tiles that wouldn't fit on a resized grid whose old origin moves by
@@ -394,6 +410,25 @@ mod tests {
         assert!(d.place("Place", vec![proposal(19.0, 0.0, 2, 2, 0.5)], Mode::Snap).is_err());
         assert!(!d.is_dirty());
         assert_eq!(d.undo_label(), Some("Place"));
+    }
+
+    #[test]
+    fn repointing_keeps_tiles_in_place_even_when_they_overlap() {
+        // Overlapping tiles from an old file: the rules would refuse to move them
+        let a = proposal(0.0, 0.0, 2, 2, 0.5).into_placed(PlacedId(1), 0.0);
+        let b = proposal(1.0, 1.0, 2, 2, 0.5).into_placed(PlacedId(2), 0.0);
+        let mut d = Document::new(DocState { tiles: vec![a, b], ..DocState::empty(GridSize { cols: 20, rows: 20 }) });
+        let before = d.state().clone();
+        let new = TileKey::new("D:/Unpacked/Tiles/t2x2.stl");
+        let to = HashMap::from([(before.tiles[0].key.clone(), new.clone())]);
+        assert_eq!(d.repoint("Move files", &to), 2);
+        assert!(d.tiles().iter().all(|t| t.key == new));
+        let moved: Vec<_> = d.tiles().iter().map(|t| (t.x, t.y, t.z, t.size)).collect();
+        let was: Vec<_> = before.tiles.iter().map(|t| (t.x, t.y, t.z, t.size)).collect();
+        assert_eq!(moved, was);
+        assert_eq!(d.undo_label(), Some("Move files"));
+        d.undo();
+        assert_eq!(*d.state(), before);
     }
 
     #[test]

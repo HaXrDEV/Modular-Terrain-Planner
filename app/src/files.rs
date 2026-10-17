@@ -437,14 +437,7 @@ pub fn export_stls(
     dir: &Path,
     title: &str,
 ) -> Result<(PathBuf, usize, Vec<TileKey>), String> {
-    let base = clean_name(&format!("{title} STL files"));
-    let mut folder = dir.join(&base);
-    let mut n = 2;
-    while folder.exists() {
-        folder = dir.join(format!("{base} ({n})"));
-        n += 1;
-    }
-    std::fs::create_dir_all(&folder).map_err(|e| format!("{} couldn't be made: {e}", folder.display()))?;
+    let folder = new_folder(dir, &format!("{title} STL files"))?;
     let mut seen = HashSet::new();
     let mut taken = HashSet::new();
     let (mut written, mut missing) = (0, Vec::new());
@@ -468,6 +461,60 @@ pub fn export_stls(
         written += 1;
     }
     Ok((folder, written, missing))
+}
+
+/// Writes the project's STL files in `items` into a new folder inside
+/// `dir`, `<title> tiles/<pack>/<path inside the pack>`, so it can join the
+/// library. The bytes come from `store`, the project as last saved or
+/// opened. Returns the folder and where each file went.
+pub fn unpack(
+    items: &[EmbeddedTile],
+    store: &EmbeddedStore,
+    dir: &Path,
+    title: &str,
+) -> Result<(PathBuf, HashMap<TileKey, TileKey>), String> {
+    let folder = new_folder(dir, &format!("{title} tiles"))?;
+    let mut taken = HashSet::new();
+    let mut moved = HashMap::new();
+    for item in items {
+        let pack = if item.pack.trim().is_empty() { "Tiles" } else { item.pack.as_str() };
+        let mut parts: Vec<String> = std::iter::once(pack)
+            .chain(item.relative.split('/'))
+            .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+            .map(clean_name)
+            .collect();
+        // Two packs of the same name can hold files of the same name
+        let name = parts.pop().unwrap_or_else(|| "tile.stl".into());
+        let (stem, ext) = name.rsplit_once('.').map_or((name.as_str(), ""), |(s, e)| (s, e));
+        let mut file = name.clone();
+        let mut n = 2;
+        while !taken.insert(format!("{}/{file}", parts.join("/")).to_lowercase()) {
+            file = if ext.is_empty() { format!("{stem} ({n})") } else { format!("{stem} ({n}).{ext}") };
+            n += 1;
+        }
+        let path = parts.iter().fold(folder.clone(), |p, part| p.join(part)).join(file);
+        let bytes = embedded::bytes(&item.key, store).map_err(|e| format!("{}: {e}", item.key.as_str()))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{} couldn't be made: {e}", parent.display()))?;
+        }
+        std::fs::write(&path, bytes).map_err(|e| format!("{} couldn't be written: {e}", path.display()))?;
+        moved.insert(item.key.clone(), TileKey::from_path(&path));
+    }
+    Ok((folder, moved))
+}
+
+/// Makes a new folder `name` inside `dir`, numbered when it's taken, so
+/// nothing is ever overwritten.
+fn new_folder(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let base = clean_name(name);
+    let mut folder = dir.join(&base);
+    let mut n = 2;
+    while folder.exists() {
+        folder = dir.join(format!("{base} ({n})"));
+        n += 1;
+    }
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{} couldn't be made: {e}", folder.display()))?;
+    Ok(folder)
 }
 
 /// A file name any system accepts.
@@ -736,6 +783,44 @@ mod tests {
         assert_eq!(again.image, Some((shown.path.clone(), "images/cave.png".into())));
         let store = embedded_store(&read_project(&path).expect("reopen"));
         assert_eq!(store.image(&shown.path).expect("inside").read().expect("read"), original);
+    }
+
+    #[test]
+    fn missing_files_unpack_into_a_new_folder() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let elsewhere = dir.path().join("Elsewhere");
+        let mut keys = Vec::new();
+        for (pack, source) in [("A", FLOOR), ("B", WALL)] {
+            let tiles = elsewhere.join(pack).join("Stone").join("floors");
+            std::fs::create_dir_all(&tiles).expect("folder");
+            std::fs::copy(source, tiles.join("floor.stl")).expect("copy");
+            keys.push(TileKey::from_path(&tiles.join("floor.stl")));
+        }
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = keys.iter().enumerate().map(|(i, k)| placed(i as u64 + 1, k, i as f32 * 4.0)).collect();
+        let mut library = Library::new(None, 0, Arc::new(|| {}));
+        // Folders as the library lists them, so the pack is "Stone" in both
+        library.add_folder(&elsewhere.join("A").join("Stone"), true);
+        library.add_folder(&elsewhere.join("B").join("Stone"), true);
+        let path = dir.path().join("castle.mtp");
+        save_project(&Document::new(state), &library, &EmbeddedStore::default(), &path).expect("save");
+        std::fs::remove_dir_all(&elsewhere).expect("another computer");
+
+        let pending = read_project(&path).expect("reopen");
+        let store = embedded_store(&pending);
+        let items = embedded_tiles(&pending, &store);
+        let (folder, moved) = unpack(&items, &store, dir.path(), "castle").expect("unpack");
+        assert_eq!(folder, dir.path().join("castle tiles"));
+        let first = folder.join("Stone").join("floors").join("floor.stl");
+        let second = folder.join("Stone").join("floors").join("floor (2).stl");
+        assert_eq!(std::fs::read(&first).expect("written"), std::fs::read(FLOOR).expect("fixture"));
+        assert_eq!(std::fs::read(&second).expect("written"), std::fs::read(WALL).expect("fixture"));
+        let mut to: Vec<TileKey> = moved.values().cloned().collect();
+        to.sort_by_key(|k| k.as_str().to_owned());
+        assert_eq!(to, [TileKey::from_path(&second), TileKey::from_path(&first)]);
+        assert!(keys.iter().all(|k| moved.contains_key(k)));
+        let (again, _) = unpack(&items, &store, dir.path(), "castle").expect("again");
+        assert_eq!(again, dir.path().join("castle tiles (2)"), "never overwrites");
     }
 
     #[test]

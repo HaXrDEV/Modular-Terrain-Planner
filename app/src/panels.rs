@@ -28,7 +28,9 @@ pub struct LibraryPanel {
 /// Requests from the panels that the app carries out.
 #[derive(Debug, PartialEq)]
 pub enum Request {
-    AddFolder { recursive: bool },
+    AddFolder {
+        recursive: bool,
+    },
     RemoveFolder(FolderId),
     ReloadFolder(FolderId),
     SetBattleMap,
@@ -37,6 +39,9 @@ pub enum Request {
     SampleTiles,
     UseStamp(usize),
     DeleteStamp(usize),
+    /// Write the project's STL files that aren't on this computer to a
+    /// folder and add it to the library.
+    AddProjectTiles,
 }
 
 pub fn size_text(size: TileSize) -> String {
@@ -179,6 +184,28 @@ impl LibraryPanel {
                             }
                         });
                         return;
+                    }
+                    if folder.embedded {
+                        let missing = library.embedded_missing();
+                        let used: BTreeSet<&str> = editor
+                            .doc
+                            .tiles()
+                            .iter()
+                            .filter(|t| missing.contains(&t.key))
+                            .map(|t| t.key.as_str())
+                            .collect();
+                        if !used.is_empty()
+                            && ui
+                                .button("Add to the library…")
+                                .on_hover_text(format!(
+                                    "{} of these STL files aren't on this computer. Writes them to a folder you \
+                                     choose and adds it to the library.",
+                                    used.len()
+                                ))
+                                .clicked()
+                        {
+                            requests.push(Request::AddProjectTiles);
+                        }
                     }
                     if !folder.skipped.is_empty() {
                         ui.label(

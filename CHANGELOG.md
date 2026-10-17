@@ -17,6 +17,8 @@ still opens.
   files that changed, so it's quick. Identical files are stored once.
 - Opening a project whose STL files changed on this computer asks
   whether to use the project's copies or the files on disk.
+- Add to the library, under In this project, unpacks the project's STL
+  files that aren't on this computer into a folder in the library.
 
 ## 0.5.0 (unreleased)
 
