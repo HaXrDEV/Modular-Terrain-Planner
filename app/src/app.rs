@@ -99,6 +99,7 @@ pub struct App {
     show_settings: bool,
     show_about: bool,
     show_shortcuts: bool,
+    palette: crate::palette::Palette,
     quitting: bool,
     title: String,
     applied: Option<(ThemeChoice, u32)>,
@@ -168,6 +169,7 @@ impl App {
             show_settings: false,
             show_about: false,
             show_shortcuts: false,
+            palette: Default::default(),
             quitting: false,
             title: String::new(),
             applied: None,
@@ -564,6 +566,7 @@ impl App {
             Command::ToggleGrid => self.viewport.show_grid = !self.viewport.show_grid,
             Command::Settings => self.show_settings = true,
             Command::Shortcuts => self.show_shortcuts = true,
+            Command::FindAnything => self.palette.show(),
             Command::About => self.show_about = true,
             Command::OpenLogFolder => open_in_file_manager(&self.paths.logs()),
         }
@@ -594,7 +597,11 @@ impl App {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // Open menus and drop-downs keep their keys (Esc closes them)
-        if ctx.egui_wants_keyboard_input() || self.dialog.is_some() || egui::Popup::is_any_open(ctx) {
+        if ctx.egui_wants_keyboard_input()
+            || self.dialog.is_some()
+            || self.palette.open
+            || egui::Popup::is_any_open(ctx)
+        {
             return;
         }
         // egui turns Ctrl+C, Ctrl+X and Ctrl+V into clipboard events rather
@@ -922,6 +929,7 @@ impl App {
                 item(ui, Command::Settings, true, &mut chosen);
             });
             ui.menu_button("Help", |ui| {
+                item(ui, Command::FindAnything, true, &mut chosen);
                 item(ui, Command::Shortcuts, true, &mut chosen);
                 item(ui, Command::OpenLogFolder, true, &mut chosen);
                 item(ui, Command::About, true, &mut chosen);
@@ -1362,6 +1370,13 @@ impl App {
     }
 
     fn windows(&mut self, ctx: &egui::Context) {
+        match self.palette.ui(ctx, &self.library) {
+            Some(crate::palette::Pick::Run(command)) => self.run(ctx, command),
+            Some(crate::palette::Pick::Place(key, size)) => {
+                self.editor.tool = Tool::Place { key, size, rotation: Default::default() };
+            }
+            None => {}
+        }
         let mut open = self.show_settings;
         egui::Window::new("Settings").open(&mut open).resizable(false).show(ctx, |ui| {
             egui::Grid::new("settings").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
@@ -1629,7 +1644,7 @@ impl App {
                     renderer: &mut self.renderer,
                     render_state: &self.render_state,
                     detail: self.settings.detail,
-                    keys_blocked: self.dialog.is_some(),
+                    keys_blocked: self.dialog.is_some() || self.palette.open,
                 },
             ),
             Tab::Inspector => {

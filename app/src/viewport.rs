@@ -79,7 +79,7 @@ pub struct ViewCtx<'a> {
     pub renderer: &'a mut Renderer,
     pub render_state: &'a egui_wgpu::RenderState,
     pub detail: f32,
-    /// A dialog has the keyboard.
+    /// A dialog or the command palette has the keyboard.
     pub keys_blocked: bool,
 }
 

@@ -10,6 +10,7 @@ mod files;
 mod instance;
 mod inventory;
 mod library;
+mod palette;
 mod panels;
 mod samples;
 mod selftest;

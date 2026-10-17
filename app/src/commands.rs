@@ -45,6 +45,7 @@ pub enum Command {
     ToggleGrid,
     Settings,
     Shortcuts,
+    FindAnything,
     About,
     OpenLogFolder,
 }
@@ -129,6 +130,12 @@ pub const COMMANDS: &[Spec] = &[
     Spec { command: Command::ResetView, label: "Reset view", shortcut: key(NONE, Key::Home), group: "View" },
     Spec { command: Command::ToggleGrid, label: "Show grid", shortcut: key(NONE, Key::G), group: "View" },
     Spec { command: Command::Settings, label: "Settings…", shortcut: key(CMD, Key::Comma), group: "View" },
+    Spec {
+        command: Command::FindAnything,
+        label: "Find a command or tile…",
+        shortcut: key(CMD, Key::K),
+        group: "Help",
+    },
     Spec { command: Command::Shortcuts, label: "Keyboard and mouse", shortcut: key(NONE, Key::F1), group: "Help" },
     Spec { command: Command::About, label: "About", shortcut: None, group: "Help" },
     Spec { command: Command::OpenLogFolder, label: "Open log folder", shortcut: None, group: "Help" },

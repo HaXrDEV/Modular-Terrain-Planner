@@ -25,6 +25,7 @@ saving writes format version 5, which earlier versions can't open.
   floor doesn't repeat one tile.
 - Stamps: save a selection (a corridor, a room) under a name and paste
   it into any project.
+- Ctrl+K finds any command or tile by typing part of its name.
 - A measure tool (M) giving lengths in cells, inches and millimetres.
 - A red, hatched ghost and a reason when a tile can't go somewhere.
 - A Print List panel: how many of each STL the layout needs, how many you

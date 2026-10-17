@@ -84,7 +84,7 @@ Add a folder of STL files with **File > Add tile folder** (or drop it onto the w
 | Look around | Right drag to orbit, middle drag to pan, wheel to zoom, **T** for 2D or 3D |
 | Export the build plan | **Ctrl+E** |
 
-**Help > Keyboard and mouse** lists everything else.
+**Ctrl+K** finds any command or tile by name, and **Help > Keyboard and mouse** lists everything else.
 
 ## Files and privacy
 
