@@ -1,0 +1,16 @@
+[package]
+name = "mtp-icons"
+description = "Renders assets/icons/app_icon.svg into the PNG, ICO and ICNS files the packages use"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+icns = "0.5"
+ico = "0.6"
+resvg = "0.48"
+
+[lints]
+workspace = true

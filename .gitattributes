@@ -1,5 +1,13 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# Shell scripts must always use LF — CRLF breaks the shebang on Linux/macOS
+# Shell scripts must use LF: CRLF breaks the shebang on Linux and macOS
 *.sh text eol=lf
+
+# STL fixtures are binary even when they start with "solid"
+*.stl binary
+*.Stl binary
+*.ttf binary
+*.png binary
+*.iss text eol=crlf
+AppRun text eol=lf

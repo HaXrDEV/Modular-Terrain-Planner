@@ -1,0 +1,24 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version and system
+      description: From Help > About, for example "0.5.0, Windows 11, NVIDIA GeForce GTX 1060 (Dx12)".
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The end of the newest file in Help > Open log folder. File paths in it may include your user name.
+      render: text

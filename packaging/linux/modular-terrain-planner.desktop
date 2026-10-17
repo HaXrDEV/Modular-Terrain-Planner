@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Modular Terrain Planner
+Comment=Plan modular terrain from STL tiles and export a build plan
+Exec=modular-terrain-planner %f
+Icon=modular-terrain-planner
+Terminal=false
+Categories=Graphics;3DGraphics;Game;
+MimeType=application/x-modular-terrain-planner;
+StartupWMClass=modular-terrain-planner

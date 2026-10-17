@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "app", "tools/icons"]
+default-members = ["app"]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/HaXrDEV/modular-terrain-planner"
+publish = false
+
+[workspace.dependencies]
+mtp-core = { path = "crates/mtp-core" }
+mtp-stl = { path = "crates/mtp-stl" }
+mtp-render = { path = "crates/mtp-render" }
+mtp-export = { path = "crates/mtp-export" }
+
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = { version = "0.30", features = ["bytemuck"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "allow"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+debug = "line-tables-only"
+lto = "thin"
+codegen-units = 4
+
+# Dependencies are slow in debug builds (mesh simplification, PNG and PDF
+# encoding), so optimise them even when the app itself is a debug build.
+[profile.dev.package."*"]
+opt-level = 2

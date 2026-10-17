@@ -1,0 +1,189 @@
+name: Release
+
+# Push a tag vX.Y.Z (the version in Cargo.toml) on main to build, check and
+# publish every platform's download. vX.Y.Z-rc1 and the like publish a
+# prerelease. Nothing is published unless every build passes, and every
+# build runs its own self-test first.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The same checks as every pull request, so a release never ships what
+  # they'd catch
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag matches Cargo.toml
+        id: check
+        run: |
+          crate=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "${tag%%-*}" != "$crate" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the version in Cargo.toml ($crate)"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$tag" = "$crate" ]; then echo "prerelease=false"; else echo "prerelease=true"; fi >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [checks, version]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: windows-x64
+          - os: macos-15
+            target: macos-universal
+          # The oldest supported Ubuntu sets the glibc floor (2.35)
+          - os: ubuntu-22.04
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NAME: ModularTerrainPlanner-${{ needs.version.outputs.version }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Add the Intel macOS target
+        if: runner.os == 'macOS'
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.target }}
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-about
+
+      - name: Install Mesa for the self-test
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 libegl1
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: cargo build --release --locked -p modular-terrain-planner
+
+      - name: Build a universal binary
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --locked -p modular-terrain-planner --target aarch64-apple-darwin
+          cargo build --release --locked -p modular-terrain-planner --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/modular-terrain-planner \
+            target/aarch64-apple-darwin/release/modular-terrain-planner \
+            target/x86_64-apple-darwin/release/modular-terrain-planner
+
+      # Loads tiles, lays them out, renders on the GPU (a software one on
+      # Windows and Linux runners) and saves a project, with the built binary
+      - name: Self-test
+        shell: bash
+        run: |
+          exe=target/release/modular-terrain-planner
+          if [ "$RUNNER_OS" = "macOS" ]; then "$exe" --self-test; else "$exe" --self-test --software; fi
+
+      - name: Licence notices
+        run: cargo about generate packaging/about.hbs -c packaging/about.toml -o target/release/THIRD_PARTY_LICENSES.html
+
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = "dist/$env:NAME"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item target/release/modular-terrain-planner.exe, target/release/THIRD_PARTY_LICENSES.html, assets/fonts/OFL.txt $stage
+          Copy-Item LICENSE "$stage/LICENSE.txt"
+          Compress-Archive -Path $stage -DestinationPath "dist/$env:NAME.zip"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=$env:VERSION" "/DSourceDir=$((Resolve-Path $stage).Path)" packaging/windows/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -Recurse $stage
+
+      # Unsigned, but ad-hoc signed so Apple silicon runs it; users clear the
+      # quarantine once (see the README)
+      - name: Package for macOS
+        if: runner.os == 'macOS'
+        run: |
+          app="dist/Modular Terrain Planner.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp target/release/modular-terrain-planner "$app/Contents/MacOS/"
+          cp assets/icons/app_icon.icns target/release/THIRD_PARTY_LICENSES.html assets/fonts/OFL.txt "$app/Contents/Resources/"
+          cp LICENSE "$app/Contents/Resources/LICENSE.txt"
+          # Bundle versions must be numbers and dots, so 0.5.0-rc1 is 0.5.0
+          sed "s/@VERSION@/${VERSION%%-*}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          codesign --force --deep --sign - "$app"
+          (cd dist && ditto -c -k --keepParent "Modular Terrain Planner.app" "$NAME.zip")
+          rm -rf "$app"
+
+      - name: Package for Linux
+        if: runner.os == 'Linux'
+        run: |
+          echo "Needs glibc $(objdump -T target/release/modular-terrain-planner | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          stage="dist/$NAME"
+          mkdir -p "$stage"
+          cp target/release/modular-terrain-planner target/release/THIRD_PARTY_LICENSES.html assets/fonts/OFL.txt LICENSE "$stage/"
+          cp packaging/linux/modular-terrain-planner.desktop packaging/linux/modular-terrain-planner.xml packaging/linux/install.sh "$stage/"
+          cp assets/icons/icon-256.png "$stage/modular-terrain-planner.png"
+          chmod +x "$stage/install.sh" "$stage/modular-terrain-planner"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          rm -rf "$stage"
+
+          appdir=build/AppDir
+          mkdir -p "$appdir/usr/bin"
+          cp target/release/modular-terrain-planner "$appdir/usr/bin/"
+          cp packaging/linux/AppRun packaging/linux/modular-terrain-planner.desktop "$appdir/"
+          cp assets/icons/icon-256.png "$appdir/modular-terrain-planner.png"
+          chmod +x "$appdir/AppRun"
+          curl -fsSL -o build/appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  build/appimagetool" | sha256sum -c -
+          chmod +x build/appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 build/appimagetool "$appdir" "dist/ModularTerrainPlanner-$VERSION-linux-x86_64.AppImage"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # The only job that can write to the repository, and only once every
+  # build has passed
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}

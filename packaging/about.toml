@@ -1,0 +1,22 @@
+# cargo about generate packaging/about.hbs -c packaging/about.toml
+# Writes the third-party licence notices that ship with every download.
+accepted = [
+    "MIT",
+    "MIT-0",
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unlicense",
+    "MPL-2.0",
+]
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
