@@ -38,9 +38,13 @@ For one file:
    modification time and loader version, so the next start skips 1 to 4.
 
 An open project's own STL files are listed under In this project. A file on
-disk always wins; the copy inside the project is only loaded, from the
-project file, when the file isn't there. Those copies are cached by their
-contents, so one STL file in several projects is prepared once.
+disk wins; the copy inside the project is only loaded, from the project
+file, when the file isn't there. Those copies are cached by their contents,
+so one STL file in several projects is prepared once. Files on disk are
+compared with their copies (size, then CRC32) when the project opens, and
+the app asks which to use for those that differ. Choosing the project's
+copies pins them: they load from the project, loading their folder again
+doesn't replace them, and saving keeps them.
 
 ## Placing tiles
 

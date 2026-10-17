@@ -18,7 +18,9 @@ reported rather than loaded wrong.
 A tile uses its STL file on this computer when it's there, and the copy
 inside the project when it isn't. Saving refreshes the copies from disk, so
 the project carries the latest version of each file. Autosaves store them
-uncompressed, which is quicker.
+uncompressed, which is quicker. When a file on this computer differs from
+its copy, opening the project asks which to use; the project's copies, if
+chosen, are kept when saving.
 
 ```json
 {

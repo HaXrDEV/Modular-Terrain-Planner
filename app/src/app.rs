@@ -70,6 +70,8 @@ enum Dialog {
         corner: Option<TileKey>,
     },
     Recovery(Vec<Autosave>),
+    /// STL files on disk that differ from their copies in the project just opened.
+    ChangedOnDisk(Vec<TileKey>),
     Crash(String),
     Message {
         title: String,
@@ -133,6 +135,8 @@ pub struct App {
     own_autosave: Option<PathBuf>,
     /// Files given at startup, opened once the recovery question is answered.
     deferred_open: Vec<PathBuf>,
+    /// Changed STL files to ask about once no other dialog is open.
+    changed_on_disk: Vec<TileKey>,
     incoming: Option<crossbeam_channel::Receiver<Vec<PathBuf>>>,
 }
 
@@ -208,6 +212,7 @@ impl App {
             repaint,
             image_shown: None,
             deferred_open: Vec::new(),
+            changed_on_disk: Vec::new(),
             incoming: startup.incoming.as_ref().map(|i| {
                 let _ = i.ctx.set(cc.egui_ctx.clone());
                 i.rx.clone()
@@ -451,7 +456,7 @@ impl App {
         self.discard_own_autosave();
         // From now on the copies inside are read from the new file
         let keys = saved.embedded.iter().map(|(k, _)| k.clone()).collect();
-        self.embedded = EmbeddedStore::in_archive(&path, saved.embedded);
+        self.embedded = EmbeddedStore::in_archive(&path, saved.embedded).with_pins_of(&self.embedded);
         self.library.set_embedded(keys);
         let note = match saved.missing.len() {
             0 => String::new(),
@@ -470,6 +475,7 @@ impl App {
         if let Some(id) = self.library.embedded_folder() {
             self.remove_folder(id);
         }
+        self.changed_on_disk.clear();
         if !tiles.is_empty() {
             self.library.add_embedded(tiles);
         }
@@ -863,6 +869,7 @@ impl App {
                 library::Event::FolderUnavailable { path, message } => {
                     self.problem(format!("{path}: {message} It stays in the library until removed."));
                 }
+                library::Event::ChangedOnDisk(keys) => self.changed_on_disk.extend(keys),
             }
         }
     }
@@ -1401,6 +1408,44 @@ impl App {
                     }
                 });
                 Dialog::Recovery(list)
+            }
+            Dialog::ChangedOnDisk(keys) => {
+                egui::Modal::new(egui::Id::new("changed on disk")).show(ctx, |ui| {
+                    ui.heading("Some STL files changed since the project was saved");
+                    ui.label("These files on this computer differ from their copies inside the project:");
+                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                        for key in &keys {
+                            ui.label(format!("{} ({})", key.file_name(), key.folder_name()))
+                                .on_hover_text(key.as_str());
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Use the project's copies")
+                            .on_hover_text(
+                                "The tiles look as they did when the project was saved, and saving keeps these copies",
+                            )
+                            .clicked()
+                        {
+                            let keys = keys.clone();
+                            then = Some(Box::new(move |app: &mut Self| {
+                                app.embedded.pin(&keys);
+                                app.library.pin(&keys);
+                                app.editor.tell(format!("Using the project's copies of {} STL files.", keys.len()));
+                            }));
+                            keep = false;
+                        }
+                        if ui
+                            .button("Use the files on this computer")
+                            .on_hover_text("Saving replaces the copies inside the project with these files")
+                            .clicked()
+                        {
+                            keep = false;
+                        }
+                    });
+                });
+                Dialog::ChangedOnDisk(keys)
             }
             Dialog::Crash(report) => {
                 egui::Modal::new(egui::Id::new("crash")).show(ctx, |ui| {
@@ -2009,6 +2054,9 @@ impl eframe::App for App {
             }
             self.library.cancel_all();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if self.dialog.is_none() && !self.changed_on_disk.is_empty() {
+            self.dialog = Some(Dialog::ChangedOnDisk(std::mem::take(&mut self.changed_on_disk)));
         }
         if self.dialog.is_none() && !self.deferred_open.is_empty() {
             let paths = std::mem::take(&mut self.deferred_open);

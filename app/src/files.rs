@@ -3,18 +3,17 @@
 //! use (format 6); every older format still opens.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use mtp_core::container::{self, Embedded, Fingerprint};
+use mtp_core::container::{self, Fingerprint};
 use mtp_core::document::{DocState, GroundImage};
 use mtp_core::persist::{write_atomic, write_atomic_with};
 use mtp_core::project::{self, LibraryFolder, ProjectFile};
 use mtp_core::tile::TileKey;
 
-use crate::embedded::{self, EmbeddedStore, Stored};
+use crate::embedded::{self, Archives, EmbeddedStore, Stored};
 use crate::library::{EmbeddedTile, Library};
 use crate::settings::VERSION;
 
@@ -152,6 +151,8 @@ struct Source {
     key: TileKey,
     /// Its copy inside the project being replaced, if there is one.
     stored: Option<Stored>,
+    /// Keep the copy even though the file on disk is different.
+    pinned: bool,
 }
 
 /// Plans saving `state` to `path`, with an entry for every STL file that
@@ -179,7 +180,7 @@ pub fn plan_save(state: &DocState, library: &Library, store: &EmbeddedStore, pat
     for record in &file.embedded {
         let Some(&key) = key_of.get(&(record.folder, record.file.as_str())) else { continue };
         if embedded::available(key, store) {
-            sources.push(Source { key: key.clone(), stored: store.get(key).cloned() });
+            sources.push(Source { key: key.clone(), stored: store.get(key).cloned(), pinned: store.is_pinned(key) });
             saved.embedded.push((key.clone(), record.entry.clone()));
             kept.push(record.clone());
         } else {
@@ -215,7 +216,7 @@ pub fn write_save(
             let mut twin = None;
             for (j, copied) in written.get(&fingerprint).into_iter().flatten() {
                 let earlier = match copied {
-                    Some((archive, inside)) => archives.read(archive, inside),
+                    Some((archive, inside)) => archives.open(archive).and_then(|a| a.read(inside)),
                     None => sources[*j].read(),
                 };
                 // The same size and CRC32 is almost surely the same file; the bytes make sure
@@ -256,24 +257,6 @@ pub fn write_save(
 /// replaced it was copied from, if it was.
 type Written = (usize, Option<(PathBuf, String)>);
 
-/// The containers copies come from, each opened once.
-#[derive(Default)]
-struct Archives(HashMap<PathBuf, Option<Embedded<File>>>);
-
-impl Archives {
-    fn open(&mut self, path: &Path) -> io::Result<&mut Embedded<File>> {
-        self.0
-            .entry(path.to_path_buf())
-            .or_insert_with(|| Embedded::open(path).ok())
-            .as_mut()
-            .ok_or_else(|| io::Error::other(format!("{} can't be read", path.display())))
-    }
-
-    fn read(&mut self, path: &Path, entry: &str) -> io::Result<Vec<u8>> {
-        self.open(path)?.read(entry)
-    }
-}
-
 /// What goes into one entry.
 enum Contents {
     /// An entry of the project being replaced, copied as it is.
@@ -292,7 +275,7 @@ impl Contents {
 
     fn same_as(&self, bytes: &[u8], archives: &mut Archives) -> io::Result<bool> {
         Ok(match self {
-            Self::Copy { archive, inside, .. } => archives.read(archive, inside)? == bytes,
+            Self::Copy { archive, inside, .. } => archives.open(archive)?.read(inside)? == bytes,
             Self::Bytes(mine) => mine == bytes,
         })
     }
@@ -300,22 +283,28 @@ impl Contents {
 
 impl Source {
     /// The copy in the project being replaced when the file on disk is the
-    /// same or isn't there, else the file's bytes.
+    /// same or isn't there (or the copy is pinned), else the file's bytes.
     fn contents(&self, archives: &mut Archives) -> io::Result<Contents> {
         let disk = Path::new(self.key.as_str());
         if let Some(Stored::Archive { path, entry }) = &self.stored
             && let Ok(archive) = archives.open(path)
             && let Some(fingerprint) = archive.fingerprint(entry)
             // A file on disk that can't be read counts as not there
-            && fingerprint.matches_file(disk).unwrap_or(true)
+            && (self.pinned || fingerprint.matches_file(disk).unwrap_or(true))
         {
             return Ok(Contents::Copy { archive: path.clone(), inside: entry.clone(), fingerprint });
         }
         self.read().map(Contents::Bytes)
     }
 
-    /// The file's bytes: from disk when it's there, else the copy.
+    /// The file's bytes: from disk when it's there, else the copy (always
+    /// the copy when it's pinned).
     fn read(&self) -> io::Result<Vec<u8>> {
+        if self.pinned
+            && let Some(stored) = &self.stored
+        {
+            return stored.read();
+        }
         match std::fs::read(self.key.as_str()) {
             Ok(bytes) => Ok(bytes),
             Err(e) => match &self.stored {
@@ -495,6 +484,7 @@ pub fn ground_image(path: &Path, rect: [f32; 4]) -> GroundImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mtp_core::container::Embedded;
     use mtp_core::document::Document;
     use mtp_core::footprint::Rotation;
     use mtp_core::grid::GridSize;
@@ -635,6 +625,35 @@ mod tests {
         std::fs::remove_file(&stl).expect("remove");
         save_project(&doc, &library, &store, &path).expect("save over the project it copies from");
         assert_eq!(inside(&path), (Some(true), std::fs::read(FLOOR).expect("fixture")));
+    }
+
+    #[test]
+    fn saving_keeps_a_pinned_copy() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tiles = dir.path().join("Tiles");
+        std::fs::create_dir(&tiles).expect("folder");
+        let stl = tiles.join("floor.stl");
+        std::fs::copy(FLOOR, &stl).expect("copy");
+        let key = TileKey::from_path(&stl);
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = vec![placed(1, &key, 2.0)];
+        let doc = Document::new(state);
+        let library = Library::new(None, 0, Arc::new(|| {}));
+        let path = dir.path().join("castle.mtp");
+        save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
+        std::fs::copy(WALL, &stl).expect("the file changes on disk");
+
+        let mut store = embedded_store(&read_project(&path).expect("reopen"));
+        store.pin(std::slice::from_ref(&key));
+        assert_eq!(embedded::bytes(&key, &store).expect("copy"), std::fs::read(FLOOR).expect("fixture"));
+        save_project(&doc, &library, &store, &path).expect("save");
+        let saved = embedded_store(&read_project(&path).expect("reopen")).with_pins_of(&store);
+        assert_eq!(embedded::bytes(&key, &saved).expect("kept"), std::fs::read(FLOOR).expect("fixture"));
+
+        // Not pinned, the file on disk goes in
+        save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
+        let store = embedded_store(&read_project(&path).expect("reopen"));
+        assert_eq!(store.get(&key).expect("inside").read().expect("read"), std::fs::read(WALL).expect("fixture"));
     }
 
     #[test]

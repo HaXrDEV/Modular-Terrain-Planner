@@ -15,6 +15,8 @@ still opens.
   them out for printing.
 - Saving runs in the background, and saving again only packs the STL
   files that changed, so it's quick. Identical files are stored once.
+- Opening a project whose STL files changed on this computer asks
+  whether to use the project's copies or the files on disk.
 
 ## 0.5.0 (unreleased)
 

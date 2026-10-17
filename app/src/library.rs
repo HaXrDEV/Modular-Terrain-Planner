@@ -15,6 +15,8 @@ use mtp_core::tile::TileKey;
 use mtp_core::units::{SourceUnit, TileSize};
 use mtp_stl::{LoadedTile, MeshCache};
 
+use crate::embedded::{self, Archives};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FolderId(pub u32);
 
@@ -85,7 +87,7 @@ pub struct EmbeddedTile {
     pub pack: String,
     /// Its path inside that folder, as shown in the library.
     pub relative: String,
-    pub stored: crate::embedded::Stored,
+    pub stored: embedded::Stored,
 }
 
 /// Where a loaded tile is listed, when not just in its folder.
@@ -98,19 +100,49 @@ struct Label {
 pub const EMBEDDED_NAME: &str = "In this project";
 
 enum Msg {
-    Found { folder: FolderId, total: usize },
-    Loaded { folder: FolderId, tile: Box<LoadedTile>, label: Option<Label> },
-    Skipped { folder: FolderId, message: String },
-    Finished { folder: FolderId },
-    Unavailable { folder: FolderId, message: String },
+    Found {
+        folder: FolderId,
+        total: usize,
+    },
+    Loaded {
+        folder: FolderId,
+        tile: Box<LoadedTile>,
+        label: Option<Label>,
+    },
+    Skipped {
+        folder: FolderId,
+        message: String,
+    },
+    Finished {
+        folder: FolderId,
+    },
+    Unavailable {
+        folder: FolderId,
+        message: String,
+    },
+    /// Files on disk that differ from their copy inside the project.
+    Changed {
+        folder: FolderId,
+        keys: Vec<TileKey>,
+    },
 }
 
 /// What happened while loading, for the app to react to.
 #[derive(Debug)]
 pub enum Event {
     TileLoaded(TileKey),
-    FolderFinished { name: String, loaded: usize, skipped: Vec<String> },
-    FolderUnavailable { path: String, message: String },
+    FolderFinished {
+        name: String,
+        loaded: usize,
+        skipped: Vec<String>,
+    },
+    FolderUnavailable {
+        path: String,
+        message: String,
+    },
+    /// STL files on disk that differ from their copies inside the project
+    /// just opened, which only fill in for files that aren't on disk.
+    ChangedOnDisk(Vec<TileKey>),
 }
 
 pub struct Library {
@@ -121,13 +153,28 @@ pub struct Library {
     cache: Option<Arc<MeshCache>>,
     next_id: u32,
     repaint: Arc<dyn Fn() + Send + Sync>,
+    /// The open project's STL files, as given to [`Library::add_embedded`].
+    embedded_items: HashMap<TileKey, EmbeddedTile>,
+    /// Files whose copy inside the project is used even though the file
+    /// is on disk.
+    pinned: HashSet<TileKey>,
 }
 
 impl Library {
     pub fn new(cache_dir: Option<PathBuf>, cache_bytes: u64, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let cache = cache_dir.map(|dir| Arc::new(MeshCache::new(dir, cache_bytes)));
-        Self { folders: Vec::new(), tiles: HashMap::new(), tx, rx, cache, next_id: 1, repaint }
+        Self {
+            folders: Vec::new(),
+            tiles: HashMap::new(),
+            tx,
+            rx,
+            cache,
+            next_id: 1,
+            repaint,
+            embedded_items: HashMap::new(),
+            pinned: HashSet::new(),
+        }
     }
 
     pub fn folders(&self) -> &[Folder] {
@@ -255,15 +302,15 @@ impl Library {
 
     /// Lists the open project's STL files in their own section, first in the
     /// library, and loads those that aren't on disk (a file on disk always
-    /// wins, so it loads from its folder as usual). The caller removes the
-    /// section of the project open before.
+    /// wins, so it loads from its folder as usual). Files on disk are
+    /// compared with their copy, and [`Event::ChangedOnDisk`] lists the ones
+    /// that differ. The caller removes the section of the project open before.
     pub fn add_embedded(&mut self, items: Vec<EmbeddedTile>) -> FolderId {
         let id = FolderId(self.next_id);
         self.next_id += 1;
-        let cancel = Arc::new(AtomicBool::new(false));
         let mut keys: Vec<TileKey> = items.iter().map(|i| i.key.clone()).collect();
         keys.sort_by_key(|k| k.stem().to_lowercase());
-        let to_load: Vec<EmbeddedTile> = items.into_iter().filter(|i| !Path::new(i.key.as_str()).is_file()).collect();
+        let to_load = items.iter().filter(|i| !Path::new(i.key.as_str()).is_file()).count();
         self.folders.insert(
             0,
             Folder {
@@ -271,27 +318,44 @@ impl Library {
                 path: String::new(),
                 name: EMBEDDED_NAME.to_owned(),
                 recursive: false,
-                status: FolderStatus::Loading { done: 0, total: to_load.len() },
+                status: FolderStatus::Loading { done: 0, total: to_load },
                 tiles: keys,
                 skipped: Vec::new(),
                 embedded: true,
-                cancel: cancel.clone(),
+                cancel: Arc::new(AtomicBool::new(false)),
             },
         );
+        self.embedded_items = items.iter().map(|i| (i.key.clone(), i.clone())).collect();
+        self.load_embedded(id, items, true);
+        id
+    }
+
+    /// Loads STL files from inside the project into its section `id`. With
+    /// `compare`, files that are on disk aren't loaded but compared with
+    /// their copy.
+    fn load_embedded(&self, id: FolderId, items: Vec<EmbeddedTile>, compare: bool) {
+        let Some(cancel) = self.folder(id).map(|f| f.cancel.clone()) else { return };
         let (tx, cache, repaint) = (self.tx.clone(), self.cache.clone(), self.repaint.clone());
         let spawned = std::thread::Builder::new().name("load embedded".into()).spawn(move || {
             let send = |m: Msg| {
                 let _ = tx.send(m);
                 repaint();
             };
-            for item in to_load {
+            let mut archives = Archives::default();
+            let mut changed = Vec::new();
+            for item in items {
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
                 let path = Path::new(item.key.as_str());
-                let result = item
-                    .stored
-                    .read()
+                if compare && path.is_file() {
+                    if embedded::changed_on_disk(&item.key, &item.stored, &mut archives) {
+                        changed.push(item.key);
+                    }
+                    continue;
+                }
+                let result = archives
+                    .read(&item.stored)
                     .map_err(|e| format!("{}: the copy inside the project can't be read ({e})", item.key.as_str()))
                     .and_then(|bytes| mtp_stl::load_bytes(path, &bytes, cache.as_deref()).map_err(|e| e.to_string()));
                 send(match result {
@@ -303,12 +367,54 @@ impl Library {
                     Err(message) => Msg::Skipped { folder: id, message },
                 });
             }
+            if !changed.is_empty() {
+                send(Msg::Changed { folder: id, keys: changed });
+            }
             send(Msg::Finished { folder: id });
         });
         if let Err(e) = spawned {
             tracing::error!("couldn't start loading the project's STL files: {e}");
         }
-        id
+    }
+
+    /// Uses the copies of `keys` inside the project from now on, though the
+    /// files are on disk: they load from the project, and loading their
+    /// folder again doesn't replace them.
+    pub fn pin(&mut self, keys: &[TileKey]) {
+        let Some(id) = self.embedded_folder() else { return };
+        let items: Vec<EmbeddedTile> = keys.iter().filter_map(|k| self.embedded_items.get(k)).cloned().collect();
+        self.pinned.extend(items.iter().map(|i| i.key.clone()));
+        if let Some(f) = self.folders.iter_mut().find(|f| f.id == id) {
+            f.status = FolderStatus::Loading { done: 0, total: items.len() };
+        }
+        self.load_embedded(id, items, false);
+    }
+
+    /// Loads files from disk again into the folders listing them, for tiles
+    /// that showed the project's copy.
+    fn reload_from_disk(&self, keys: Vec<TileKey>) {
+        let mut by_folder: HashMap<FolderId, Vec<PathBuf>> = HashMap::new();
+        for key in keys {
+            if let Some(f) = self.folders.iter().find(|f| !f.embedded && f.tiles.contains(&key)) {
+                by_folder.entry(f.id).or_default().push(PathBuf::from(key.as_str()));
+            }
+        }
+        for (id, paths) in by_folder {
+            let Some(cancel) = self.folder(id).map(|f| f.cancel.clone()) else { continue };
+            let (tx, cache, repaint) = (self.tx.clone(), self.cache.clone(), self.repaint.clone());
+            let spawned = std::thread::Builder::new().name("reload".into()).spawn(move || {
+                mtp_stl::load_many(&paths, cache.as_deref(), &cancel, |_, result| {
+                    let _ = tx.send(match result {
+                        Ok(tile) => Msg::Loaded { folder: id, tile: Box::new(tile), label: None },
+                        Err(e) => Msg::Skipped { folder: id, message: e.to_string() },
+                    });
+                    repaint();
+                });
+            });
+            if let Err(e) = spawned {
+                tracing::error!("couldn't start loading files again: {e}");
+            }
+        }
     }
 
     /// After a save: the project's section lists what's inside it now.
@@ -341,6 +447,13 @@ impl Library {
         let Some(pos) = self.folders.iter().position(|f| f.id == id) else { return Vec::new() };
         let folder = self.folders.remove(pos);
         folder.cancel.store(true, Ordering::Relaxed);
+        // With the project's section gone, pinned files come from disk again
+        let unpinned: Vec<TileKey> = if folder.embedded {
+            self.embedded_items.clear();
+            std::mem::take(&mut self.pinned).into_iter().collect()
+        } else {
+            Vec::new()
+        };
         // Folders can overlap (a folder with subfolders and one of its
         // subfolders): tiles another folder still lists stay
         let mut removed = Vec::new();
@@ -357,6 +470,7 @@ impl Library {
                 }
             }
         }
+        self.reload_from_disk(unpinned.into_iter().filter(|k| self.tiles.contains_key(k)).collect());
         removed
     }
 
@@ -410,9 +524,15 @@ impl Library {
                         f.tiles.push(key.clone());
                     }
                     // A file on disk wins: the copy inside the project only
-                    // fills in for one that isn't there
-                    let from_disk = self.tiles.get(&key).is_some_and(|t| !embedded.contains(&t.folder));
-                    if !(embedded.contains(&folder) && from_disk) {
+                    // fills in for one that isn't there, or that was pinned,
+                    // and then loading the file again doesn't replace it
+                    let pinned = self.pinned.contains(&key);
+                    let take = if embedded.contains(&folder) {
+                        pinned || !self.tiles.get(&key).is_some_and(|t| !embedded.contains(&t.folder))
+                    } else {
+                        !pinned || !self.tiles.contains_key(&key)
+                    };
+                    if take {
                         self.tiles.insert(key.clone(), entry);
                         events.push(Event::TileLoaded(key));
                     }
@@ -444,6 +564,11 @@ impl Library {
                         events.push(Event::FolderUnavailable { path: f.path.clone(), message });
                     }
                 }
+                // Only for the project still open
+                Msg::Changed { folder, keys } if embedded.contains(&folder) => {
+                    events.push(Event::ChangedOnDisk(keys));
+                }
+                Msg::Changed { .. } => {}
             }
         }
         events
@@ -454,9 +579,67 @@ impl Library {
 mod tests {
     use super::*;
 
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/stl/good");
+
+    /// Polls until `done` holds, gathering the events.
+    fn wait(library: &mut Library, done: impl Fn(&Library) -> bool) -> Vec<Event> {
+        let start = std::time::Instant::now();
+        let mut events = Vec::new();
+        loop {
+            events.extend(library.poll());
+            if library.progress().is_none() && done(library) {
+                return events;
+            }
+            assert!(start.elapsed().as_secs() < 30, "loading took too long");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_changed_file_is_reported_and_its_copy_can_be_pinned() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let folder = std::path::absolute(dir.path().join("Tiles")).expect("absolute");
+        std::fs::create_dir(&folder).expect("folder");
+        let stl = folder.join("floor.stl");
+        std::fs::copy(Path::new(FIXTURES).join("floor_2x2_mm.stl"), &stl).expect("copy");
+        let key = TileKey::from_path(&stl);
+        // The project carries an older version of the file: a wall
+        let wall = std::fs::read(Path::new(FIXTURES).join("wall_inch.stl")).expect("fixture");
+        let item = EmbeddedTile {
+            key: key.clone(),
+            pack: "Tiles".into(),
+            relative: "floor.stl".into(),
+            stored: embedded::Stored::Memory(Arc::new(wall)),
+        };
+        let mut library = Library::new(None, 0, Arc::new(|| {}));
+        let disk = library.add_folder(&folder, false);
+        let section = library.add_embedded(vec![item]);
+        let events = wait(&mut library, |l| l.tile(&key).is_some());
+        let changed: Vec<&Vec<TileKey>> =
+            events.iter().filter_map(|e| if let Event::ChangedOnDisk(k) = e { Some(k) } else { None }).collect();
+        assert_eq!(changed, [&vec![key.clone()]]);
+        let on_disk = library.tile(&key).expect("loaded").size;
+        assert_eq!(library.tile(&key).expect("loaded").folder, disk, "the file on disk wins");
+
+        library.pin(std::slice::from_ref(&key));
+        wait(&mut library, |l| l.tile(&key).is_some_and(|t| t.folder == section));
+        let pinned = library.tile(&key).expect("pinned").size;
+        assert_ne!(pinned, on_disk, "the project's copy, a wall");
+
+        // Loading the folder again doesn't replace it
+        library.remove_folder(disk);
+        let disk = library.add_folder(&folder, false);
+        wait(&mut library, |l| l.folder(disk).is_some_and(|f| f.status == FolderStatus::Ready));
+        assert_eq!(library.tile(&key).expect("still pinned").size, pinned);
+
+        // Closing the project brings the file on disk back
+        library.remove_folder(section);
+        wait(&mut library, |l| l.tile(&key).is_some_and(|t| t.folder == disk && t.size == on_disk));
+    }
+
     #[test]
     fn overlapping_folders_keep_shared_tiles() {
-        let fixtures = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/stl/good"));
+        let fixtures = Path::new(FIXTURES);
         let mut library = Library::new(None, 0, Arc::new(|| {}));
         let all = library.add_folder(fixtures, true);
         let sub = library.add_folder(&fixtures.join("OpenForge [Stone]"), false);
