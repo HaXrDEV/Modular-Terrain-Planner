@@ -1,0 +1,33 @@
+{
+  "version": 4,
+  "grid_cols": 120,
+  "grid_rows": 90,
+  "folders": [
+    "C:/Tiles/OpenForge"
+  ],
+  "tiles": [
+    {
+      "stl_path": "C:/Tiles/OpenForge/floor.stl",
+      "grid_x": 2,
+      "grid_y": 2,
+      "rotation": 0,
+      "z_offset": 0.0
+    },
+    {
+      "stl_path": "C:/Tiles/OpenForge/floor.stl",
+      "grid_x": 2,
+      "grid_y": 2,
+      "rotation": 0,
+      "z_offset": 0.0
+    }
+  ],
+  "ground_image": {
+    "path": "C:/Maps/cave.png",
+    "rect": [
+      0.0,
+      0.0,
+      120.0,
+      90.0
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+{"version": 4, "grid_cols": 40, "grid_rows": 40, "folders": [], "tiles": [{"stl_path": "a.stl", "grid_x": 1, "grid_y": 1, "rotation": 45, "z_offset": 0}, {"stl_path": "b.stl", "grid_x": "NaN", "grid_y": 1, "rotation": -90, "z_offset": 0}, {"stl_path": "c.stl", "grid_x": 3, "grid_y": 1, "rotation": 450, "z_offset": 0}], "ground_image": {"path": "x.png", "rect": [1]}}

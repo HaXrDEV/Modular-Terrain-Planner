@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "grid_cols": 60,
+  "grid_rows": 30,
+  "folders": [
+    "C:/Tiles/OpenForge"
+  ],
+  "tiles": [
+    {
+      "stl_path": "C:/Tiles/OpenForge/floor.stl",
+      "grid_x": 4,
+      "grid_y": 6,
+      "rotation": 180
+    }
+  ]
+}

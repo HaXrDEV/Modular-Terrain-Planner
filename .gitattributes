@@ -3,3 +3,7 @@
 
 # Shell scripts must always use LF — CRLF breaks the shebang on Linux/macOS
 *.sh text eol=lf
+
+# STL fixtures are binary even when they start with "solid"
+*.stl binary
+*.Stl binary

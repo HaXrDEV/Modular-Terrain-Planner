@@ -1,0 +1,17 @@
+{
+  "version": 4,
+  "grid_cols": 40,
+  "grid_rows": 40,
+  "folders": [
+    "C:\\Users\\someone\\Tiles\\Dungeon"
+  ],
+  "tiles": [
+    {
+      "stl_path": "C:\\Users\\someone\\Tiles\\Dungeon\\door.stl",
+      "grid_x": 1,
+      "grid_y": 1,
+      "rotation": 90,
+      "z_offset": 0.0
+    }
+  ]
+}

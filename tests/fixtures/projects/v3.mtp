@@ -1,0 +1,32 @@
+{
+  "version": 3,
+  "grid_cols": 80,
+  "grid_rows": 80,
+  "folders": [
+    "C:/Tiles/OpenForge",
+    "D:/More Tiles"
+  ],
+  "tiles": [
+    {
+      "stl_path": "C:/Tiles/OpenForge/floor.stl",
+      "grid_x": 0,
+      "grid_y": 0,
+      "rotation": 0,
+      "z_offset": 0.0
+    },
+    {
+      "stl_path": "C:/Tiles/OpenForge/floor.stl",
+      "grid_x": 0,
+      "grid_y": 0,
+      "rotation": 270,
+      "z_offset": 0.48
+    },
+    {
+      "stl_path": "D:/More Tiles/pillar.stl",
+      "grid_x": 10.25,
+      "grid_y": 3.5,
+      "rotation": 90,
+      "z_offset": 0.0
+    }
+  ]
+}

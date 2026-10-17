@@ -1,0 +1,19 @@
+{
+  "folders": [
+    "C:/Tiles/OpenForge"
+  ],
+  "tiles": [
+    {
+      "stl_path": "C:/Tiles/OpenForge/floor.stl",
+      "grid_x": 0,
+      "grid_y": 0,
+      "rotation": 0
+    },
+    {
+      "stl_path": "C:/Tiles/OpenForge/wall.stl",
+      "grid_x": 2,
+      "grid_y": 0,
+      "rotation": 90
+    }
+  ]
+}
