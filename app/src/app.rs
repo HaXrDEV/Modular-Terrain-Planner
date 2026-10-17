@@ -496,6 +496,7 @@ impl App {
             Command::TurnRight => self.editor.turn(Turn::Clockwise, mode),
             Command::ToolSelect => self.editor.tool = Tool::Select,
             Command::ToolErase => self.editor.tool = Tool::Erase,
+            Command::ToolMeasure => self.editor.tool = Tool::Measure,
             Command::Escape => {
                 if self.editor.tool != Tool::Select {
                     self.editor.tool = Tool::Select;
@@ -883,9 +884,11 @@ impl App {
                 item(ui, Command::About, true, &mut chosen);
             });
             ui.separator();
-            for (tool, label, command) in
-                [(Tool::Select, "Select", Command::ToolSelect), (Tool::Erase, "Erase", Command::ToolErase)]
-            {
+            for (tool, label, command) in [
+                (Tool::Select, "Select", Command::ToolSelect),
+                (Tool::Erase, "Erase", Command::ToolErase),
+                (Tool::Measure, "Measure", Command::ToolMeasure),
+            ] {
                 let on = self.editor.tool == tool;
                 let s = spec(command);
                 let tip = s.shortcut.map(|k| ctx.format_shortcut(&k)).unwrap_or_default();
@@ -916,6 +919,7 @@ impl App {
                     "Click or drag to place · Shift+drag fills · Shift+click draws a line · Q/E turn · Ctrl places freely · Esc stops"
                 }
                 Tool::Erase => "Click or drag over tiles to remove them · Esc stops",
+                Tool::Measure => "Drag to measure · snaps to half cells, Ctrl for free · Esc stops",
                 Tool::Paste => "Click to paste · Q/E turn · Esc stops",
             };
             ui.label(RichText::new(tool).strong());

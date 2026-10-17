@@ -23,6 +23,8 @@ pub enum Tool {
     Erase,
     /// Places the clipboard where clicked.
     Paste,
+    /// Drag to measure a distance.
+    Measure,
 }
 
 impl Tool {
@@ -32,6 +34,7 @@ impl Tool {
             Self::Place { .. } => "Place",
             Self::Erase => "Erase",
             Self::Paste => "Paste",
+            Self::Measure => "Measure",
         }
     }
 }
@@ -346,7 +349,7 @@ impl Editor {
                     c.turn(turn);
                 }
             }
-            Tool::Select | Tool::Erase => {
+            Tool::Select | Tool::Erase | Tool::Measure => {
                 if self.selection.is_empty() {
                     return;
                 }

@@ -20,6 +20,7 @@ saving writes format version 5, which earlier versions can't open.
   pointer.
 - Levels for multi-storey dungeons: each is its own floor, the others are
   hidden, faded or stacked, and the build plan gives each its own map.
+- A measure tool (M) giving lengths in cells, inches and millimetres.
 - A red, hatched ghost and a reason when a tile can't go somewhere.
 - A Print List panel: how many of each STL the layout needs, how many you
   own (remembered across projects) and what's left to print, with a

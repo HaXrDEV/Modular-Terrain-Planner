@@ -44,6 +44,8 @@ enum Drag {
     },
     Erase,
     Pan,
+    /// Measuring from a point on the ground.
+    Measure,
 }
 
 /// What the pointer is over.
@@ -64,6 +66,8 @@ pub struct Viewport {
     /// Why the current ghost would be refused, for the status bar.
     pub refusal: Option<Refusal>,
     context_tile: Option<PlacedId>,
+    /// The last measurement, from and to, on the ground.
+    measure: Option<(Vec2, Vec2)>,
     context_point: Option<Vec2>,
     framed_once: bool,
 }
@@ -98,6 +102,7 @@ impl Viewport {
             hover: None,
             refusal: None,
             context_tile: None,
+            measure: None,
             context_point: None,
             framed_once: false,
         }
@@ -379,6 +384,19 @@ impl Viewport {
                     }
                 }
             }
+            Tool::Measure => {
+                let snap = |p: Vec2| if mode == Mode::Snap { (p * 2.0).round() / 2.0 } else { p };
+                if let Some(h) = self.hover {
+                    if primary_drag_start {
+                        self.measure = Some((snap(h.point), snap(h.point)));
+                        self.drag = Drag::Measure;
+                    } else if matches!(self.drag, Drag::Measure)
+                        && let Some((from, _)) = self.measure
+                    {
+                        self.measure = Some((from, snap(h.point)));
+                    }
+                }
+            }
             Tool::Erase => {
                 let erase_now = primary_click || primary_drag_start || matches!(self.drag, Drag::Erase);
                 if primary_drag_start {
@@ -551,7 +569,40 @@ impl Viewport {
         if !ghosts.is_empty() || matches!(self.drag, Drag::Move { .. }) {
             ui.ctx().request_repaint();
         }
+        if editor.tool == Tool::Measure
+            && let Some((from, to)) = self.measure
+        {
+            self.draw_measure(ui, rect, aspect, from, to, off);
+        }
         self.level_strip(ui, rect, editor);
+    }
+
+    /// The measuring line and its length in cells, inches and millimetres.
+    fn draw_measure(&self, ui: &egui::Ui, rect: Rect, aspect: f32, from: Vec2, to: Vec2, height: f32) {
+        let vp = self.camera.view_proj(aspect);
+        let screen = |p: Vec2| {
+            let ndc = vp.project_point3(p.extend(height));
+            rect.min + EVec2::new((ndc.x + 1.0) * 0.5 * rect.width(), (1.0 - ndc.y) * 0.5 * rect.height())
+        };
+        let (a, b) = (screen(from), screen(to));
+        let color = ui.visuals().warn_fg_color;
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.line_segment([a, b], Stroke::new(2.0, color));
+        painter.circle_filled(a, 4.0, color);
+        painter.circle_filled(b, 4.0, color);
+        let d = to - from;
+        let text = format!(
+            "{:.1} cells: {}\n{} across, {} deep",
+            d.length(),
+            mtp_core::units::describe_cells(d.length()),
+            mtp_core::units::describe_cells(d.x.abs()),
+            mtp_core::units::describe_cells(d.y.abs())
+        );
+        let pos = b + EVec2::new(12.0, -12.0);
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.0), ui.visuals().text_color());
+        let bg = Rect::from_min_size(pos, galley.size()).expand(5.0);
+        painter.rect_filled(bg, 4.0, ui.visuals().extreme_bg_color.gamma_multiply(0.92));
+        painter.galley(pos, galley, ui.visuals().text_color());
     }
 
     /// The level picker in the view's top right corner.

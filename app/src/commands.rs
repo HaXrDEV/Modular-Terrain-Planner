@@ -30,6 +30,7 @@ pub enum Command {
     TurnRight,
     ToolSelect,
     ToolErase,
+    ToolMeasure,
     Escape,
     GridSize,
     SetBattleMap,
@@ -95,6 +96,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec { command: Command::TurnRight, label: "Turn clockwise", shortcut: key(NONE, Key::E), group: "Edit" },
     Spec { command: Command::ToolSelect, label: "Select tool", shortcut: key(NONE, Key::V), group: "Tools" },
     Spec { command: Command::ToolErase, label: "Erase tool", shortcut: key(NONE, Key::X), group: "Tools" },
+    Spec { command: Command::ToolMeasure, label: "Measure tool", shortcut: key(NONE, Key::M), group: "Tools" },
     Spec {
         command: Command::Escape,
         label: "Cancel, then back to Select",
@@ -135,6 +137,7 @@ pub const MOUSE: &[(&str, &str)] = &[
     ("Arrow keys", "Nudge the selection a cell (Shift: 1\"), or pan"),
     ("W A S D", "Pan"),
     ("Page Up, Page Down", "Edit the level above or below"),
+    ("M, then drag", "Measure a distance in cells, inches and millimetres"),
 ];
 
 #[cfg(test)]

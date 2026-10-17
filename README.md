@@ -78,6 +78,7 @@ Add a folder of STL files with **File > Add tile folder** (or drop it onto the w
 | Place freely, off the grid | Hold **Ctrl** |
 | Pick up a placed tile | **Alt**+click it |
 | Build another floor | **Page Up** and **Page Down**, or the Levels box in the view |
+| Measure | **M**, then drag: the length in cells, inches and millimetres |
 | Look around | Right drag to orbit, middle drag to pan, wheel to zoom, **T** for 2D or 3D |
 | Export the build plan | **Ctrl+E** |
 
