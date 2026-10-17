@@ -1,19 +1,14 @@
-# Byte-compiled / optimized / DLL files
+# Rust
+/target/
+
+# Release packaging output
+/dist/
+/build/
+
+# Python, for tools/golden.py against the python-final tag
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Distribution / packaging
-.Python
-build/
-dist/
-*.egg-info/
-*.egg
-
-# Virtual environments
 .venv/
-venv/
-env/
 
 # IDE
 .vscode/
@@ -22,14 +17,3 @@ env/
 # OS
 Thumbs.db
 .DS_Store
-
-# PyInstaller
-build/
-dist/
-*.spec
-
-# Generated build artefacts
-gui/icons/app_icon.ico
-
-# Rust
-/target/
