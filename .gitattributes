@@ -7,3 +7,5 @@
 # STL fixtures are binary even when they start with "solid"
 *.stl binary
 *.Stl binary
+*.ttf binary
+*.png binary
