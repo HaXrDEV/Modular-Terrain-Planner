@@ -5,10 +5,20 @@
 //! Without an adapter the test is skipped, unless `MTP_REQUIRE_GPU=1` (set by
 //! the CI GPU job). `MTP_SOFTWARE_GPU=1` asks for a CPU adapter.
 
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
 use mtp_core::footprint::Rotation;
 use mtp_core::tile::TileKey;
 use mtp_core::units::TileSize;
 use mtp_render::{Camera, DrawKind, DrawTile, Frame, Palette, Projection, Renderer, device};
+
+/// The tests take turns on the GPU. On a Windows CI runner, two WARP
+/// devices created at once on separate threads crashed the test process
+/// (access violation) before either test had its device.
+fn gpu_turn() -> MutexGuard<'static, ()> {
+    static GPU: Mutex<()> = Mutex::new(());
+    GPU.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn renderer() -> Option<Renderer> {
     let software = std::env::var_os("MTP_SOFTWARE_GPU").is_some_and(|v| v == "1");
@@ -54,6 +64,7 @@ fn pixel(rgba: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn draws_tiles_ghosts_and_the_selection_outline() {
+    let _turn = gpu_turn();
     let Some(mut r) = renderer() else { return };
     let key = TileKey::new("cube.stl");
     let (p, i) = cube();
@@ -103,6 +114,7 @@ fn draws_tiles_ghosts_and_the_selection_outline() {
 
 #[test]
 fn thumbnails_render_the_finest_resident_tier() {
+    let _turn = gpu_turn();
     let Some(mut r) = renderer() else { return };
     let key = TileKey::new("cube.stl");
     let (p, i) = cube();
