@@ -15,26 +15,30 @@ pub struct Paths {
     pub config: PathBuf,
     pub data: PathBuf,
     pub cache: PathBuf,
+    /// The Python version's settings, whose recent projects and folders a
+    /// first start brings over. Only the per-user folders look there.
+    pub python_settings: Option<PathBuf>,
 }
 
 impl Paths {
     pub fn from_os() -> Self {
+        let python_settings =
+            directories::BaseDirs::new().map(|d| d.home_dir().join(".modular-terrain-planner").join("settings.json"));
         match directories::ProjectDirs::from("", "", APP_NAME) {
             Some(d) => Self {
                 config: d.config_dir().to_path_buf(),
                 data: d.data_local_dir().to_path_buf(),
                 cache: d.cache_dir().to_path_buf(),
+                python_settings,
             },
-            None => {
-                let base = std::env::temp_dir().join("modular-terrain-planner");
-                Self { config: base.join("config"), data: base.join("data"), cache: base.join("cache") }
-            }
+            None => Self { python_settings, ..Self::under(&std::env::temp_dir().join("modular-terrain-planner")) },
         }
     }
 
-    /// Everything inside one folder, for tests and `--portable`.
+    /// Everything inside one folder, for tests and `--portable`. Nothing
+    /// outside it is read, so a portable start is a clean one.
     pub fn under(root: &Path) -> Self {
-        Self { config: root.join("config"), data: root.join("data"), cache: root.join("cache") }
+        Self { config: root.join("config"), data: root.join("data"), cache: root.join("cache"), python_settings: None }
     }
 
     pub fn settings_file(&self) -> PathBuf {
@@ -167,7 +171,7 @@ pub const MAX_RECENT: usize = 10;
 impl Settings {
     /// Reads the settings. A damaged file is renamed aside (so it can be
     /// looked at) and defaults are used; a missing one tries the Python
-    /// version's file for recent projects and folders.
+    /// version's file for recent projects and folders, when `paths` names one.
     pub fn load(paths: &Paths) -> (Self, Option<String>) {
         let path = paths.settings_file();
         match std::fs::read(&path) {
@@ -182,7 +186,7 @@ impl Settings {
                     )
                 }
             },
-            Err(_) => (Self::from_python_version().unwrap_or_default(), None),
+            Err(_) => (paths.python_settings.as_deref().and_then(Self::from_python_version).unwrap_or_default(), None),
         }
     }
 
@@ -208,10 +212,10 @@ impl Settings {
         self
     }
 
-    /// Recent projects and folders from `~/.modular-terrain-planner`.
-    fn from_python_version() -> Option<Self> {
-        let home = directories::BaseDirs::new()?.home_dir().join(".modular-terrain-planner").join("settings.json");
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(home).ok()?).ok()?;
+    /// Recent projects and folders from the Python version's settings file
+    /// (`~/.modular-terrain-planner/settings.json`).
+    fn from_python_version(file: &Path) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
         let strings = |key: &str| -> Vec<String> {
             value
                 .get(key)
@@ -258,6 +262,24 @@ mod tests {
         assert!(problem.is_none());
         assert_eq!(loaded.recent_projects, ["a.mtp", "b.mtp"]);
         assert_eq!(loaded.ui_scale, 1.0);
+    }
+
+    #[test]
+    fn only_a_per_user_start_brings_over_the_python_settings() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let python = dir.path().join("python settings.json");
+        let old = br#"{"recent_projects": ["C:/Maps/castle.mtp"], "recent_folders": ["C:/Tiles"]}"#;
+        std::fs::write(&python, old).expect("write");
+
+        // --portable starts clean, wherever the Python version's file is
+        let (portable, problem) = Settings::load(&Paths::under(&dir.path().join("portable")));
+        assert!(problem.is_none());
+        assert_eq!(portable, Settings::default());
+
+        let per_user = Paths { python_settings: Some(python), ..Paths::under(&dir.path().join("user")) };
+        let (s, _) = Settings::load(&per_user);
+        assert_eq!(s.recent_projects, ["C:/Maps/castle.mtp"]);
+        assert_eq!(s.session_folders, [SessionFolder { path: "C:/Tiles".into(), recursive: false }]);
     }
 
     #[test]
