@@ -98,6 +98,18 @@ impl MeshCache {
         Ok(h.finish())
     }
 
+    /// Identifies a file by its contents, for files that aren't on disk
+    /// (STL files inside a project). The same file in several projects is
+    /// then prepared once.
+    pub(crate) fn key_for_bytes(&self, bytes: &[u8]) -> u64 {
+        let mut h = Fnv1a::default();
+        h.write(b"contents");
+        h.write(&(bytes.len() as u64).to_le_bytes());
+        h.write(bytes);
+        h.write(&LOADER_VERSION.to_le_bytes());
+        h.finish()
+    }
+
     fn file_for(&self, key: u64) -> PathBuf {
         self.dir.join(format!("{key:016x}.{EXTENSION}"))
     }

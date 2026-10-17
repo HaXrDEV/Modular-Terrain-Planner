@@ -3,6 +3,7 @@
 //! the project file format.
 
 pub mod color;
+pub mod container;
 pub mod document;
 pub mod footprint;
 pub mod grid;

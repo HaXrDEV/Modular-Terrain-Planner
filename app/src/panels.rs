@@ -160,6 +160,7 @@ impl LibraryPanel {
             for folder in library.folders() {
                 let open = !self.collapsed.contains(&folder.id);
                 let header = match &folder.status {
+                    _ if folder.embedded && folder.tiles.is_empty() => continue,
                     FolderStatus::Scanning => format!("{} (looking…)", folder.name),
                     FolderStatus::Loading { done, total } => format!("{} ({done} of {total})", folder.name),
                     FolderStatus::Ready => format!("{} ({})", folder.name, folder.tiles.len()),
@@ -229,6 +230,12 @@ impl LibraryPanel {
                     } else {
                         self.collapsed.remove(&folder.id);
                     }
+                }
+                if folder.embedded {
+                    resp.header_response.on_hover_text(
+                        "The STL files saved inside this project. A file on this computer is used when it's there.",
+                    );
+                    continue;
                 }
                 resp.header_response.context_menu(|ui| {
                     if ui.button("Load again").clicked() {

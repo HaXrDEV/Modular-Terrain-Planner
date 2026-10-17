@@ -20,9 +20,10 @@ use mtp_render::{DrawKind, DrawTile, Palette, Projection, Renderer, Target};
 
 use crate::commands::{COMMANDS, Command, MOUSE, spec};
 use crate::editor::{Editor, Tool};
+use crate::embedded::EmbeddedStore;
 use crate::exports::{self, ExportKind};
 use crate::files::{self, Autosave, PendingOpen};
-use crate::library::{self, FolderId, Library};
+use crate::library::{self, EmbeddedTile, FolderId, Library};
 use crate::panels::{self, LibraryPanel, Problem, Request};
 use crate::settings::{APP_NAME, Backend, Paths, SessionFolder, Settings, ThemeChoice, VERSION};
 use crate::viewport::{ViewCtx, Viewport};
@@ -47,7 +48,7 @@ enum After {
 
 enum Dialog {
     Unsaved(After),
-    MissingFolders(PendingOpen),
+    MissingFolders(Box<PendingOpen>),
     /// `from_left`: grow or shrink on the left and bottom instead of the
     /// right and top.
     GridSize {
@@ -113,6 +114,8 @@ pub struct App {
     /// Tells this window's autosave file apart from other windows' and
     /// earlier sessions'.
     session: String,
+    /// The STL files inside the open project.
+    embedded: EmbeddedStore,
     /// The autosave this window wrote, the only one it may delete.
     own_autosave: Option<PathBuf>,
     /// Files given at startup, opened once the recovery question is answered.
@@ -184,6 +187,7 @@ impl App {
                 format!("{:x}{:05x}", std::process::id(), nanos & 0xfffff)
             },
             own_autosave: None,
+            embedded: EmbeddedStore::default(),
             image_shown: None,
             deferred_open: Vec::new(),
             incoming: startup.incoming.as_ref().map(|i| {
@@ -242,6 +246,7 @@ impl App {
     fn proceed(&mut self, after: After) {
         match after {
             After::New => {
+                self.set_embedded(EmbeddedStore::default(), Vec::new());
                 self.replace_editor(Editor::empty(self.editor.doc.grid()));
                 self.viewport.reset_view(self.editor.doc.grid().cols, self.editor.doc.grid().rows);
             }
@@ -256,7 +261,8 @@ impl App {
                 Ok(mut pending) => {
                     // Missing folders are kept as saved; the recovered tiles stay as they were
                     pending.missing.clear();
-                    self.finish_open(pending);
+                    // The autosave is deleted below, so its STL files are read now
+                    self.finish_open(pending, true);
                     // The autosave file is no place to keep working in
                     let file = a.file.to_string_lossy().into_owned();
                     self.settings.recent_projects.retain(|p| *p != file);
@@ -296,26 +302,37 @@ impl App {
 
     fn open_path(&mut self, path: &Path) {
         match files::read_project(path) {
-            Ok(pending) if pending.missing.is_empty() => self.finish_open(pending),
-            Ok(pending) => self.dialog = Some(Dialog::MissingFolders(pending)),
+            // Nothing to ask when the project carries what isn't here
+            Ok(pending) if files::uncovered(&pending).is_empty() => self.finish_open(pending, false),
+            Ok(pending) => self.dialog = Some(Dialog::MissingFolders(Box::new(pending))),
             Err(e) => self.dialog = Some(Dialog::Message { title: "Couldn't open the project".into(), text: e }),
         }
     }
 
-    fn finish_open(&mut self, pending: PendingOpen) {
+    fn finish_open(&mut self, pending: PendingOpen, read_now: bool) {
         tracing::info!("opening {}", pending.path.display());
         let state = files::finish_open(&pending);
+        let mut store = files::embedded_store(&pending);
+        if read_now {
+            match store.read_into_memory() {
+                Ok(s) => store = s,
+                Err(e) => {
+                    self.problem(format!("The STL files inside {} couldn't be read: {e}", pending.path.display()))
+                }
+            }
+        }
+        let tiles = files::embedded_tiles(&pending, &store);
+        self.set_embedded(store, tiles);
         for w in &pending.file.warnings {
             self.problem(format!("{}: {w}", pending.path.display()));
         }
-        for i in &pending.missing {
-            if pending.found[*i].is_none() {
-                let f = &pending.file.folders[*i];
-                self.problem(format!(
-                    "The tile folder {} wasn't found. Its tiles are kept, drawn as grey boxes, and saved as they were.",
-                    f.absolute.as_deref().unwrap_or(&f.path)
-                ));
-            }
+        for (folder, tiles) in files::uncovered(&pending) {
+            let f = &pending.file.folders[folder];
+            self.problem(format!(
+                "The tile folder {} wasn't found, and {tiles} of its tiles' STL files aren't inside the project. \
+                 They're kept, drawn as grey boxes, and saved as they were.",
+                f.absolute.as_deref().unwrap_or(&f.path)
+            ));
         }
         let mut doc = Document::new(state);
         for (path, recursive) in files::folders_to_load(&pending) {
@@ -350,19 +367,84 @@ impl App {
                 }
             }
         };
-        match files::save_project(&self.editor.doc, &self.library, &path) {
-            Ok(()) => {
+        match files::save_project(&self.editor.doc, &self.library, &self.embedded, &path) {
+            Ok(saved) => {
                 self.editor.doc.mark_saved();
                 self.editor.path = Some(path.clone());
                 self.settings.add_recent_project(&path.to_string_lossy());
                 self.discard_own_autosave();
-                self.editor.tell(format!("Saved {}.", path.display()));
+                // From now on the copies inside are read from the new file
+                let keys = saved.embedded.iter().map(|(k, _)| k.clone()).collect();
+                self.embedded = EmbeddedStore::in_archive(&path, saved.embedded);
+                self.library.set_embedded(keys);
+                let note = match saved.missing.len() {
+                    0 => String::new(),
+                    n => format!(
+                        " {n} STL {} aren't on this computer, so {} saved without them.",
+                        if n == 1 { "file" } else { "files" },
+                        if n == 1 { "its tiles are" } else { "their tiles are" }
+                    ),
+                };
+                self.editor.tell(format!("Saved {}.{note}", path.display()));
                 true
             }
             Err(e) => {
                 self.dialog = Some(Dialog::Message { title: "Couldn't save".into(), text: e });
                 false
             }
+        }
+    }
+
+    /// Swaps in the STL files of the project now open, and their section in
+    /// the library.
+    fn set_embedded(&mut self, store: EmbeddedStore, tiles: Vec<EmbeddedTile>) {
+        if let Some(id) = self.library.embedded_folder() {
+            self.remove_folder(id);
+        }
+        if !tiles.is_empty() {
+            self.library.add_embedded(tiles);
+        }
+        self.embedded = store;
+    }
+
+    /// File > Export STL files: one copy of each STL file the layout uses,
+    /// named as in the print list, into a new folder.
+    fn export_stls(&mut self) {
+        if self.editor.doc.tiles().is_empty() {
+            self.dialog =
+                Some(Dialog::Message { title: "Nothing to export".into(), text: "Place some tiles first.".into() });
+            return;
+        }
+        let mut dialog = rfd::FileDialog::new().set_title("Where to put the STL files");
+        if let Some(dir) = self.editor.path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(dir) = dialog.pick_folder() else { return };
+        let info = exports::tile_info(&self.editor, &self.library, &self.inventory);
+        let input = mtp_export::ExportInput {
+            title: self.editor.title(),
+            state: self.editor.doc.state(),
+            info: &info,
+            level: None,
+        };
+        let names = mtp_export::print_list(&input).into_iter().map(|r| (r.key, r.display_name)).collect();
+        match files::export_stls(self.editor.doc.state(), &self.embedded, &names, &dir, &self.editor.title()) {
+            Ok((folder, written, missing)) => {
+                for key in &missing {
+                    self.problem(format!(
+                        "{} isn't on this computer or inside the project, so it wasn't exported.",
+                        key.as_str()
+                    ));
+                }
+                let note = if missing.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {} missing (see Problems).", missing.len())
+                };
+                self.editor.tell(format!("Exported {written} STL files to {}.{note}", folder.display()));
+                open_in_file_manager(&folder);
+            }
+            Err(e) => self.dialog = Some(Dialog::Message { title: "Couldn't export the STL files".into(), text: e }),
         }
     }
 
@@ -374,7 +456,8 @@ impl App {
         self.last_autosave = Instant::now();
         if self.editor.doc.is_dirty() {
             let dir = self.paths.autosave();
-            match files::autosave(&dir, &self.session, &self.editor.doc, &self.library, self.editor.path.as_deref()) {
+            let original = self.editor.path.as_deref();
+            match files::autosave(&dir, &self.session, &self.editor.doc, &self.library, &self.embedded, original) {
                 Ok(p) => {
                     tracing::info!("autosaved to {}", p.display());
                     self.own_autosave = Some(p);
@@ -485,6 +568,7 @@ impl App {
             Command::ExportPdf => self.export(ExportKind::Pdf),
             Command::ExportPng => self.export(ExportKind::Png),
             Command::ExportCsv => self.export(ExportKind::Csv),
+            Command::ExportStls => self.export_stls(),
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::Undo => self.editor.undo(),
             Command::Redo => self.editor.redo(),
@@ -846,6 +930,7 @@ impl App {
             .library
             .folders()
             .iter()
+            .filter(|f| !f.embedded)
             .map(|f| SessionFolder { path: f.path.clone(), recursive: f.recursive })
             .collect();
         if let Err(e) = self.settings.save(&self.paths) {
@@ -896,6 +981,7 @@ impl App {
                 item(ui, Command::ExportPdf, any, &mut chosen);
                 item(ui, Command::ExportPng, any, &mut chosen);
                 item(ui, Command::ExportCsv, any, &mut chosen);
+                item(ui, Command::ExportStls, any, &mut chosen);
                 ui.separator();
                 item(ui, Command::Quit, true, &mut chosen);
             });
@@ -1085,7 +1171,7 @@ impl App {
                 let dir = pending.project_dir();
                 egui::Modal::new(egui::Id::new("missing")).show(ctx, |ui| {
                     ui.heading("Some tile folders weren't found");
-                    ui.label("Point to where they are now, or open without them: their tiles are kept as grey boxes and saved as they were.");
+                    ui.label("Point to where they are now, or open without them: tiles whose STL file isn't inside the project are kept as grey boxes and saved as they were.");
                     ui.add_space(6.0);
                     for &i in &pending.missing {
                         let f = &pending.file.folders[i];
@@ -1115,7 +1201,7 @@ impl App {
                     });
                 });
                 if !keep && !pending.found.is_empty() {
-                    then = Some(Box::new(move |app: &mut Self| app.finish_open(pending)));
+                    then = Some(Box::new(move |app: &mut Self| app.finish_open(*pending, false)));
                     Dialog::Message { title: String::new(), text: String::new() }
                 } else {
                     Dialog::MissingFolders(pending)
@@ -1386,10 +1472,19 @@ impl App {
     }
 
     fn remove_folder(&mut self, id: FolderId) {
+        // Only tiles no other folder lists leave, so only their thumbnails go
+        let listed_elsewhere =
+            |key: &TileKey| self.library.folders().iter().any(|f| f.id != id && f.tiles.contains(key));
         let thumbs: Vec<egui::TextureId> = self
             .library
             .folder(id)
-            .map(|f| f.tiles.iter().filter_map(|k| self.library.tile(k).and_then(|t| t.thumbnail)).collect())
+            .map(|f| {
+                f.tiles
+                    .iter()
+                    .filter(|k| !listed_elsewhere(k))
+                    .filter_map(|k| self.library.tile(k).and_then(|t| t.thumbnail))
+                    .collect()
+            })
             .unwrap_or_default();
         for key in self.library.remove_folder(id) {
             self.renderer.release_mesh(&key);
@@ -1632,7 +1727,7 @@ impl App {
         if let Some(Dialog::MissingFolders(_)) = &self.dialog
             && let Some(Dialog::MissingFolders(pending)) = self.dialog.take()
         {
-            self.finish_open(pending);
+            self.finish_open(*pending, false);
         }
         let Some((path, settled)) = self.screenshot.as_mut() else { return };
         ctx.request_repaint();

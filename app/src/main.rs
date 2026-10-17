@@ -5,6 +5,7 @@ mod app;
 mod commands;
 mod diagnostics;
 mod editor;
+mod embedded;
 mod exports;
 mod files;
 mod instance;

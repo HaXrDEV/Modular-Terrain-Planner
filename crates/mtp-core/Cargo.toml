@@ -11,9 +11,16 @@ publish.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+zip.workspace = true
+# Not used directly: picks the deflate backend zip compresses with
+flate2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[package.metadata.cargo-machete]
+# Only here to pick zip's deflate backend
+ignored = ["flate2"]
 
 [lints]
 workspace = true

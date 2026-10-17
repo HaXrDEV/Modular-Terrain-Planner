@@ -5,7 +5,7 @@ the app know nothing about the UI.
 
 | Crate | Owns |
 | :--- | :--- |
-| `crates/mtp-core` | Units, footprints and turning, the cell index, the placement rule, undo history, the document, `.mtp` files and atomic saves. No GPU or UI code. |
+| `crates/mtp-core` | Units, footprints and turning, the cell index, the placement rule, undo history, the document, `.mtp` files (a ZIP container with the project's STL files) and atomic saves. No GPU or UI code. |
 | `crates/mtp-stl` | Reading STL files, sizing tiles, simplified levels of detail, the mesh cache and folder scanning. |
 | `crates/mtp-render` | The wgpu renderer, the camera, picking and thumbnails. |
 | `crates/mtp-export` | The build plan PDF, the PNG map and the CSV print list. |
@@ -36,6 +36,11 @@ For one file:
    would barely shrink.
 5. **Cache.** The result is stored in the mesh cache, keyed by path, size,
    modification time and loader version, so the next start skips 1 to 4.
+
+An open project's own STL files are listed under In this project. A file on
+disk always wins; the copy inside the project is only loaded, from the
+project file, when the file isn't there. Those copies are cached by their
+contents, so one STL file in several projects is prepared once.
 
 ## Placing tiles
 

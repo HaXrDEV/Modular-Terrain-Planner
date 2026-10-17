@@ -1,14 +1,20 @@
 //! Opening and saving projects, autosave and recovery, battle map images.
+//! Projects are saved as containers that carry the STL files their tiles
+//! use (format 6); every older format still opens.
 
+use std::collections::{HashMap, HashSet};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use mtp_core::container;
 use mtp_core::document::{DocState, Document, GroundImage};
-use mtp_core::persist::write_atomic;
+use mtp_core::persist::{write_atomic, write_atomic_with};
 use mtp_core::project::{self, LibraryFolder, ProjectFile};
 use mtp_core::tile::TileKey;
 
-use crate::library::Library;
+use crate::embedded::{self, EmbeddedStore};
+use crate::library::{EmbeddedTile, Library};
 use crate::settings::VERSION;
 
 /// A project being opened, waiting for missing folders to be found.
@@ -34,8 +40,7 @@ pub fn dir_of(path: &Path) -> String {
 /// Reads a project and looks for its folders. A failed read changes
 /// nothing, so the open project stays as it was.
 pub fn read_project(path: &Path) -> Result<PendingOpen, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{} can't be read: {e}", path.display()))?;
-    let file = project::read(&bytes).map_err(|e| format!("{} can't be opened: {e}", path.display()))?;
+    let file = container::read_file(path).map_err(|e| format!("{} can't be opened: {e}", path.display()))?;
     let dir = dir_of(path);
     let found: Vec<Option<String>> =
         file.folders.iter().map(|f| project::locate(&dir, f, |p| Path::new(p).is_dir())).collect();
@@ -55,7 +60,8 @@ pub fn finish_open(pending: &PendingOpen) -> DocState {
 
 /// Folders a document needs, in the order to load them. Folders that
 /// weren't found are listed too, at their saved place, so they show as not
-/// found in the library and are saved back as they were.
+/// found in the library and are saved back as they were, unless the project
+/// carries every tile in them: then they're only clutter.
 pub fn folders_to_load(pending: &PendingOpen) -> Vec<(String, bool)> {
     let dir = pending.project_dir();
     pending
@@ -63,23 +69,128 @@ pub fn folders_to_load(pending: &PendingOpen) -> Vec<(String, bool)> {
         .folders
         .iter()
         .zip(&pending.found)
-        .map(|(f, found)| (found.clone().unwrap_or_else(|| project::saved_location(&dir, f)), f.recursive))
+        .enumerate()
+        .filter(|(i, (_, found))| found.is_some() || !carried(pending, *i))
+        .map(|(_, (f, found))| (found.clone().unwrap_or_else(|| project::saved_location(&dir, f)), f.recursive))
         .collect()
 }
 
-pub fn project_bytes(state: &DocState, library: &Library, path: &Path) -> Vec<u8> {
-    // Folders that aren't there right now are written back too, so an
-    // unplugged drive doesn't change the project
-    let open: Vec<LibraryFolder> =
-        library.folders().iter().map(|f| LibraryFolder { path: f.path.clone(), recursive: f.recursive }).collect();
-    let file = project::from_state(state, &open, &dir_of(path));
-    project::write(&file, VERSION).into_bytes()
+/// Whether the project carries the STL file of every tile in folder `i`.
+fn carried(pending: &PendingOpen, i: usize) -> bool {
+    let mut tiles = pending.file.tiles.iter().filter(|t| t.folder == i).peekable();
+    tiles.peek().is_some() && tiles.all(|t| pending.file.embedded.iter().any(|e| e.folder == i && e.file == t.file))
 }
 
-/// Saves atomically, keeping the previous file as `.bak`.
-pub fn save_project(doc: &Document, library: &Library, path: &Path) -> Result<(), String> {
-    let bytes = project_bytes(doc.state(), library, path);
-    write_atomic(path, &bytes, true).map_err(|e| format!("{} couldn't be saved: {e}", path.display()))
+/// The STL files inside an opened project, by the tile key each stands in
+/// for, read from the project file when needed.
+pub fn embedded_store(pending: &PendingOpen) -> EmbeddedStore {
+    let entries = project::embedded_keys(&pending.file, &pending.project_dir(), &pending.found);
+    EmbeddedStore::in_archive(&pending.path, entries.into_iter().map(|(key, e)| (key, e.entry.clone())))
+}
+
+/// Folders that weren't found and hold tiles whose STL file isn't inside
+/// the project either, with how many such tiles each has.
+pub fn uncovered(pending: &PendingOpen) -> Vec<(usize, usize)> {
+    let inside: HashSet<(usize, &str)> = pending.file.embedded.iter().map(|e| (e.folder, e.file.as_str())).collect();
+    pending
+        .missing
+        .iter()
+        .filter(|&&i| pending.found.get(i).is_some_and(Option::is_none))
+        .map(|&i| {
+            let tiles = pending.file.tiles.iter().filter(|t| t.folder == i && !inside.contains(&(i, t.file.as_str())));
+            (i, tiles.count())
+        })
+        .filter(|&(_, n)| n > 0)
+        .collect()
+}
+
+/// What the library's "In this project" section shows for `store`.
+pub fn embedded_tiles(pending: &PendingOpen, store: &EmbeddedStore) -> Vec<EmbeddedTile> {
+    let dir = pending.project_dir();
+    let mut tiles = Vec::new();
+    for (key, record) in project::embedded_keys(&pending.file, &dir, &pending.found) {
+        let Some(stored) = store.get(&key) else { continue };
+        let folder = &pending.file.folders[record.folder];
+        let saved = folder.absolute.as_deref().unwrap_or(&folder.path);
+        let pack = saved.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_owned();
+        tiles.push(EmbeddedTile { key, pack, relative: record.file.clone(), stored: stored.clone() });
+    }
+    tiles
+}
+
+/// What a save put inside the project.
+#[derive(Debug, Default)]
+pub struct Saved {
+    /// The STL files inside it now, by the tile key each stands in for.
+    pub embedded: Vec<(TileKey, String)>,
+    /// STL files that are neither on this computer nor inside the project
+    /// being replaced, so their tiles are saved without them.
+    pub missing: Vec<TileKey>,
+}
+
+/// The project file for `state`, with an entry for every STL file that can
+/// be carried, and the key each entry stands in for.
+fn plan(state: &DocState, library: &Library, store: &EmbeddedStore, path: &Path) -> (ProjectFile, Vec<TileKey>, Saved) {
+    // Folders that aren't there right now are written back too, so an
+    // unplugged drive doesn't change the project
+    let open: Vec<LibraryFolder> = library
+        .folders()
+        .iter()
+        .filter(|f| !f.embedded)
+        .map(|f| LibraryFolder { path: f.path.clone(), recursive: f.recursive })
+        .collect();
+    let mut file = project::from_state(state, &open, &dir_of(path));
+    container::name_entries(&mut file);
+    // from_state writes the tiles in the document's order
+    let mut key_of: HashMap<(usize, &str), &TileKey> = HashMap::new();
+    for (record, tile) in file.tiles.iter().zip(&state.tiles) {
+        key_of.entry((record.folder, record.file.as_str())).or_insert(&tile.key);
+    }
+    let mut keys = Vec::new();
+    let mut saved = Saved::default();
+    let mut kept = Vec::new();
+    for record in &file.embedded {
+        let Some(key) = key_of.get(&(record.folder, record.file.as_str())) else { continue };
+        if embedded::available(key, store) {
+            keys.push((*key).clone());
+            saved.embedded.push(((*key).clone(), record.entry.clone()));
+            kept.push(record.clone());
+        } else {
+            saved.missing.push((*key).clone());
+        }
+    }
+    file.embedded = kept;
+    (file, keys, saved)
+}
+
+/// Writes `state` as a container with its STL files, streamed one at a
+/// time, atomically.
+fn write_project(
+    state: &DocState,
+    library: &Library,
+    store: &EmbeddedStore,
+    path: &Path,
+    keep_backup: bool,
+    compress: bool,
+) -> Result<Saved, String> {
+    let (file, keys, saved) = plan(state, library, store, path);
+    let mut next = keys.iter();
+    write_atomic_with(path, keep_backup, |f| {
+        let out = container::write_to(BufWriter::new(f), &file, VERSION, compress, |_| {
+            let key = next.next().ok_or_else(|| std::io::Error::other("an STL file went missing"))?;
+            embedded::bytes(key, store).map_err(|e| std::io::Error::other(format!("{}: {e}", key.as_str())))
+        })?;
+        out.into_inner().map_err(std::io::IntoInnerError::into_error)?.flush()
+    })
+    .map_err(|e| format!("{} couldn't be saved: {e}", path.display()))?;
+    Ok(saved)
+}
+
+/// Saves atomically, keeping the previous file as `.bak`. The STL files
+/// come from disk when they're there, else from `store`, the project being
+/// replaced.
+pub fn save_project(doc: &Document, library: &Library, store: &EmbeddedStore, path: &Path) -> Result<Saved, String> {
+    write_project(doc.state(), library, store, path, true, true)
 }
 
 /// Adds the extension when the file dialog didn't.
@@ -103,21 +214,32 @@ fn note_path(file: &Path) -> PathBuf {
     file.with_extension("origin")
 }
 
-/// Autosaves `doc`. Each session writes its own file (`session` tells them
-/// apart), so one window never overwrites or deletes another's.
+/// Autosaves `doc`, STL files included (stored, not compressed, so it's
+/// quick). Each session writes its own file (`session` tells them apart),
+/// so one window never overwrites or deletes another's.
 pub fn autosave(
     dir: &Path,
     session: &str,
     doc: &Document,
     library: &Library,
+    store: &EmbeddedStore,
     original: Option<&Path>,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let name =
         original.and_then(|p| p.file_stem()).map_or_else(|| "Untitled".into(), |s| s.to_string_lossy().into_owned());
     let file = dir.join(format!("{name}-{session}.autosave.mtp"));
-    let bytes = project_bytes(doc.state(), library, original.unwrap_or(&file));
-    write_atomic(&file, &bytes, false).map_err(|e| e.to_string())?;
+    // Paths are worked out against the original, so recovering keeps them
+    let (plan_file, keys, _) = plan(doc.state(), library, store, original.unwrap_or(&file));
+    let mut next = keys.iter();
+    write_atomic_with(&file, false, |f| {
+        let out = container::write_to(BufWriter::new(f), &plan_file, VERSION, false, |_| {
+            let key = next.next().ok_or_else(|| std::io::Error::other("an STL file went missing"))?;
+            embedded::bytes(key, store)
+        })?;
+        out.into_inner().map_err(std::io::IntoInnerError::into_error)?.flush()
+    })
+    .map_err(|e| e.to_string())?;
     let note = original.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     write_atomic(&note_path(&file), note.as_bytes(), false).map_err(|e| e.to_string())?;
     Ok(file)
@@ -152,6 +274,58 @@ pub fn discard_autosaves(dir: &Path) {
     for a in autosaves(dir) {
         discard_autosave(&a);
     }
+}
+
+/// Writes one copy of every STL file the layout uses into a new folder
+/// inside `dir`, named after the project, so nothing is ever overwritten.
+/// Files are named as in the print list. Returns the folder, how many files
+/// were written, and the tiles whose STL file is nowhere to be found.
+pub fn export_stls(
+    state: &DocState,
+    store: &EmbeddedStore,
+    names: &HashMap<TileKey, String>,
+    dir: &Path,
+    title: &str,
+) -> Result<(PathBuf, usize, Vec<TileKey>), String> {
+    let base = clean_name(&format!("{title} STL files"));
+    let mut folder = dir.join(&base);
+    let mut n = 2;
+    while folder.exists() {
+        folder = dir.join(format!("{base} ({n})"));
+        n += 1;
+    }
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{} couldn't be made: {e}", folder.display()))?;
+    let mut seen = HashSet::new();
+    let mut taken = HashSet::new();
+    let (mut written, mut missing) = (0, Vec::new());
+    for t in &state.tiles {
+        if !seen.insert(t.key.clone()) {
+            continue;
+        }
+        let Ok(bytes) = embedded::bytes(&t.key, store) else {
+            missing.push(t.key.clone());
+            continue;
+        };
+        let stem = clean_name(names.get(&t.key).map_or(t.key.stem(), String::as_str));
+        let mut name = format!("{stem}.stl");
+        let mut n = 2;
+        while !taken.insert(name.to_lowercase()) {
+            name = format!("{stem} ({n}).stl");
+            n += 1;
+        }
+        let path = folder.join(&name);
+        std::fs::write(&path, bytes).map_err(|e| format!("{} couldn't be written: {e}", path.display()))?;
+        written += 1;
+    }
+    Ok((folder, written, missing))
+}
+
+/// A file name any system accepts.
+fn clean_name(name: &str) -> String {
+    let cleaned: String =
+        name.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c }).collect();
+    let cleaned = cleaned.trim().trim_end_matches('.').to_owned();
+    if cleaned.is_empty() { "tile".to_owned() } else { cleaned }
 }
 
 /// A battle map decoded and scaled to what the GPU takes.
@@ -192,7 +366,123 @@ pub fn ground_image(path: &Path, rect: [f32; 4]) -> GroundImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mtp_core::footprint::Rotation;
+    use mtp_core::grid::GridSize;
+    use mtp_core::tile::{Placed, PlacedId};
     use std::sync::Arc;
+
+    const FLOOR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/stl/good/floor_2x2_mm.stl");
+
+    /// Waits for the library to load what it was given.
+    fn settle(library: &mut Library) {
+        let start = std::time::Instant::now();
+        loop {
+            library.poll();
+            if library.progress().is_none() {
+                return;
+            }
+            assert!(start.elapsed().as_secs() < 30, "loading took too long");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn placed(id: u64, key: &TileKey, x: f32) -> Placed {
+        Placed {
+            id: PlacedId(id),
+            key: key.clone(),
+            size: mtp_core::units::TileSize { w: 2, h: 2, gz: 0.5 },
+            size_known: true,
+            x,
+            y: 2.0,
+            z: 0.0,
+            rotation: Rotation::ZERO,
+            level: 0,
+        }
+    }
+
+    #[test]
+    fn a_project_carries_its_stl_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tiles = dir.path().join("Tiles");
+        std::fs::create_dir(&tiles).expect("folder");
+        let stl = tiles.join("floor_2x2_mm.stl");
+        std::fs::copy(FLOOR, &stl).expect("copy");
+        let original = std::fs::read(&stl).expect("read");
+
+        let mut library = Library::new(None, 0, Arc::new(|| {}));
+        library.add_folder(&tiles, false);
+        settle(&mut library);
+        let key = TileKey::from_path(&stl);
+        let size = library.tile(&key).expect("loaded").size;
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = vec![placed(1, &key, 2.0), placed(2, &key, 6.0)];
+        let path = dir.path().join("castle.mtp");
+        let saved = save_project(&Document::new(state), &library, &EmbeddedStore::default(), &path).expect("save");
+        assert_eq!((saved.embedded.len(), saved.missing.len()), (1, 0), "one copy however many tiles use it");
+
+        // The tiles' folder is gone, as on another computer
+        std::fs::remove_dir_all(&tiles).expect("remove");
+        let pending = read_project(&path).expect("reopen");
+        assert_eq!(pending.missing.len(), 1);
+        assert!(uncovered(&pending).is_empty(), "nothing to ask: the project carries it");
+        assert!(folders_to_load(&pending).is_empty(), "nor to list as not found");
+        let store = embedded_store(&pending);
+        let reopened = finish_open(&pending);
+        assert_eq!(reopened.tiles.len(), 2);
+        assert_eq!(reopened.tiles[0].key, key);
+        assert_eq!(embedded::bytes(&key, &store).expect("inside"), original);
+
+        // The library's "In this project" section loads it instead
+        let mut elsewhere = Library::new(None, 0, Arc::new(|| {}));
+        elsewhere.add_embedded(embedded_tiles(&pending, &store));
+        settle(&mut elsewhere);
+        let tile = elsewhere.tile(&key).expect("loaded from inside the project");
+        assert_eq!((tile.size, tile.pack.as_deref()), (size, Some("Tiles")));
+
+        // Saving over it again, the folder still gone, keeps the copy
+        let again = save_project(&Document::new(reopened), &elsewhere, &store, &path).expect("save again");
+        assert_eq!((again.embedded.len(), again.missing.len()), (1, 0));
+        let store = embedded_store(&read_project(&path).expect("reopen"));
+        assert_eq!(embedded::bytes(&key, &store).expect("still inside"), original);
+    }
+
+    #[test]
+    fn a_file_on_disk_wins_over_the_copy_inside() {
+        // The library keeps folders as absolute paths without ".."
+        let floor = std::path::absolute(FLOOR).expect("absolute");
+        let key = TileKey::from_path(&floor);
+        let mut library = Library::new(None, 0, Arc::new(|| {}));
+        let folder = floor.parent().expect("folder");
+        library.add_folder(folder, false);
+        settle(&mut library);
+        let from_disk = library.tile(&key).expect("loaded").folder;
+        // A stale copy inside the project of a file that is on disk
+        let stale = crate::embedded::Stored::Memory(Arc::new(b"solid stale".to_vec()));
+        let item = EmbeddedTile { key: key.clone(), pack: "good".into(), relative: "x".into(), stored: stale };
+        let section = library.add_embedded(vec![item]);
+        settle(&mut library);
+        assert_eq!(library.tile(&key).expect("still there").folder, from_disk);
+        assert!(library.folder(section).expect("section").tiles.contains(&key), "listed in the section too");
+    }
+
+    #[test]
+    fn exported_stl_files_go_into_a_new_folder() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let key = TileKey::new(FLOOR);
+        let gone = TileKey::new("C:/Gone/wall.stl");
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = vec![placed(1, &key, 2.0), placed(2, &key, 6.0), placed(3, &gone, 10.0)];
+        let names = HashMap::from([(key.clone(), "floor (Packs)".to_owned())]);
+        let store = EmbeddedStore::default();
+        let (folder, written, missing) =
+            export_stls(&state, &store, &names, dir.path(), "Crypt: level 1").expect("export");
+        assert_eq!(folder, dir.path().join("Crypt_ level 1 STL files"));
+        assert_eq!((written, missing), (1, vec![gone]));
+        let copy = std::fs::read(folder.join("floor (Packs).stl")).expect("written");
+        assert_eq!(copy, std::fs::read(FLOOR).expect("fixture"));
+        let (second, ..) = export_stls(&state, &store, &names, dir.path(), "Crypt: level 1").expect("again");
+        assert_eq!(second, dir.path().join("Crypt_ level 1 STL files (2)"), "never overwrites");
+    }
 
     #[test]
     fn save_then_open_keeps_unresolved_tiles() {
@@ -203,7 +493,9 @@ mod tests {
         let state = finish_open(&pending);
         let library = Library::new(None, 0, Arc::new(|| {}));
         let path = dir.path().join("castle.mtp");
-        save_project(&Document::new(state.clone()), &library, &path).expect("save");
+        let saved =
+            save_project(&Document::new(state.clone()), &library, &EmbeddedStore::default(), &path).expect("save");
+        assert!(saved.embedded.is_empty(), "the fixture's STL files aren't here to carry");
         let again = finish_open(&read_project(&path).expect("reopen"));
         assert_eq!(again.tiles, state.tiles);
     }
@@ -215,8 +507,8 @@ mod tests {
         let gone = dir.path().join("Unplugged drive").join("Tiles");
         library.add_folder(&gone, true);
         let path = dir.path().join("castle.mtp");
-        let bytes = project_bytes(&Document::default().state().clone(), &library, &path);
-        let file = mtp_core::project::read(&bytes).expect("readable");
+        save_project(&Document::default(), &library, &EmbeddedStore::default(), &path).expect("save");
+        let file = container::read_file(&path).expect("readable");
         assert_eq!(file.folders.len(), 1);
         assert!(file.folders[0].recursive, "the subfolders setting is kept");
         assert_eq!(file.folders[0].path, "Unplugged drive/Tiles");
@@ -227,8 +519,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let library = Library::new(None, 0, Arc::new(|| {}));
         let original = dir.path().join("castle.mtp");
-        let mine = autosave(dir.path(), "a", &Document::default(), &library, Some(&original)).expect("autosave");
-        autosave(dir.path(), "b", &Document::default(), &library, Some(&original)).expect("another window");
+        let store = EmbeddedStore::default();
+        let doc = Document::default();
+        let mine = autosave(dir.path(), "a", &doc, &library, &store, Some(&original)).expect("autosave");
+        autosave(dir.path(), "b", &doc, &library, &store, Some(&original)).expect("another window");
         let found = autosaves(dir.path());
         assert_eq!(found.len(), 2, "two sessions don't overwrite each other");
         discard_autosave_file(&mine);

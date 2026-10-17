@@ -2,6 +2,18 @@
 
 Release notes on GitHub list every pull request. This is the short version.
 
+## 0.6.0 (unreleased)
+
+Saving writes format version 6, which 0.5 can't open. Every older project
+still opens.
+
+### New
+
+- Projects carry the STL files their tiles use, like a PSD carries its
+  layers, so a project opens complete on another computer. The library
+  lists them under In this project, and File > Export STL files writes
+  them out for printing.
+
 ## 0.5.0 (unreleased)
 
 The app is rebuilt in Rust. Projects from earlier versions open as they are;
