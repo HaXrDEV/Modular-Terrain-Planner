@@ -19,6 +19,8 @@ still opens.
   whether to use the project's copies or the files on disk.
 - Add to the library, under In this project, unpacks the project's STL
   files that aren't on this computer into a folder in the library.
+- Export STL files can write only what's left to print, with the counts
+  in the file names, and puts Print list.csv beside them.
 
 ## 0.5.0 (unreleased)
 

@@ -72,6 +72,7 @@ enum Dialog {
     Recovery(Vec<Autosave>),
     /// STL files on disk that differ from their copies in the project just opened.
     ChangedOnDisk(Vec<TileKey>),
+    ExportStls(files::StlExport),
     Crash(String),
     Message {
         title: String,
@@ -137,6 +138,8 @@ pub struct App {
     deferred_open: Vec<PathBuf>,
     /// Changed STL files to ask about once no other dialog is open.
     changed_on_disk: Vec<TileKey>,
+    /// What Export STL files wrote last.
+    stl_export: files::StlExport,
     incoming: Option<crossbeam_channel::Receiver<Vec<PathBuf>>>,
 }
 
@@ -213,6 +216,7 @@ impl App {
             image_shown: None,
             deferred_open: Vec::new(),
             changed_on_disk: Vec::new(),
+            stl_export: files::StlExport::default(),
             incoming: startup.incoming.as_ref().map(|i| {
                 let _ = i.ctx.set(cc.egui_ctx.clone());
                 i.rx.clone()
@@ -485,23 +489,24 @@ impl App {
         self.embedded = store;
     }
 
-    /// File > Export STL files: one copy of each STL file the layout uses,
-    /// named as in the print list, into a new folder.
-    fn export_stls(&mut self) {
-        if self.saving.is_some() {
-            self.editor.warn("Wait for the save in progress to finish.");
-            return;
-        }
+    /// File > Export STL files: asks what to write first.
+    fn ask_export_stls(&mut self) {
         if self.editor.doc.tiles().is_empty() {
             self.dialog =
                 Some(Dialog::Message { title: "Nothing to export".into(), text: "Place some tiles first.".into() });
             return;
         }
-        let mut dialog = rfd::FileDialog::new().set_title("Where to put the STL files");
-        if let Some(dir) = self.editor.path.as_ref().and_then(|p| p.parent()) {
-            dialog = dialog.set_directory(dir);
+        self.dialog = Some(Dialog::ExportStls(self.stl_export));
+    }
+
+    /// One copy of each STL file the layout uses, named as in the print
+    /// list, into a new folder with the print list beside them.
+    fn export_stls(&mut self, options: files::StlExport) {
+        self.stl_export = options;
+        if self.saving.is_some() {
+            self.editor.warn("Wait for the save in progress to finish.");
+            return;
         }
-        let Some(dir) = dialog.pick_folder() else { return };
         let info = exports::tile_info(&self.editor, &self.library, &self.inventory);
         let input = mtp_export::ExportInput {
             title: self.editor.title(),
@@ -509,8 +514,22 @@ impl App {
             info: &info,
             level: None,
         };
-        let names = mtp_export::print_list(&input).into_iter().map(|r| (r.key, r.display_name)).collect();
-        match files::export_stls(self.editor.doc.state(), &self.embedded, &names, &dir, &self.editor.title()) {
+        let rows = mtp_export::print_list(&input);
+        // Without owned counts, everything is left to print
+        let options = files::StlExport { left_only: options.left_only && !self.inventory.is_empty(), ..options };
+        if options.left_only && rows.iter().all(|r| r.to_print() == 0) {
+            self.dialog = Some(Dialog::Message {
+                title: "Nothing left to print".into(),
+                text: "You own enough prints of every tile the layout uses.".into(),
+            });
+            return;
+        }
+        let mut dialog = rfd::FileDialog::new().set_title("Where to put the STL files");
+        if let Some(dir) = self.editor.path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(dir) = dialog.pick_folder() else { return };
+        match files::export_stls(&rows, &self.embedded, &dir, &self.editor.title(), options) {
             Ok((folder, written, missing)) => {
                 for key in &missing {
                     self.problem(format!(
@@ -688,7 +707,7 @@ impl App {
             Command::ExportPdf => self.export(ExportKind::Pdf),
             Command::ExportPng => self.export(ExportKind::Png),
             Command::ExportCsv => self.export(ExportKind::Csv),
-            Command::ExportStls => self.export_stls(),
+            Command::ExportStls => self.ask_export_stls(),
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::Undo => self.editor.undo(),
             Command::Redo => self.editor.redo(),
@@ -1484,6 +1503,30 @@ impl App {
                     });
                 });
                 Dialog::ChangedOnDisk(keys)
+            }
+            Dialog::ExportStls(mut options) => {
+                let owned_known = !self.inventory.is_empty();
+                egui::Modal::new(egui::Id::new("export stls")).show(ctx, |ui| {
+                    ui.heading("Export STL files");
+                    ui.label("One copy of each STL file the layout uses, named as in the print list, with Print list.csv beside them.");
+                    ui.add_space(6.0);
+                    ui.add_enabled(owned_known, egui::Checkbox::new(&mut options.left_only, "Only what's left to print"))
+                        .on_hover_text("Leaves out the files you own enough prints of")
+                        .on_disabled_hover_text("Count the prints you own in the Print list first");
+                    ui.checkbox(&mut options.counts, "Counts in file names")
+                        .on_hover_text("How many to print, such as Floor 2x2 ×4.stl");
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Choose folder…").clicked() {
+                            then = Some(Box::new(move |app: &mut Self| app.export_stls(options)));
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                Dialog::ExportStls(options)
             }
             Dialog::Crash(report) => {
                 egui::Modal::new(egui::Id::new("crash")).show(ctx, |ui| {

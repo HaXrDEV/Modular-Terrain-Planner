@@ -12,6 +12,7 @@ use mtp_core::document::{DocState, GroundImage};
 use mtp_core::persist::{write_atomic, write_atomic_with};
 use mtp_core::project::{self, LibraryFolder, ProjectFile};
 use mtp_core::tile::TileKey;
+use mtp_export::{PathMode, PrintRow};
 
 use crate::embedded::{self, Archives, EmbeddedStore, Stored};
 use crate::library::{EmbeddedTile, Library};
@@ -426,30 +427,40 @@ pub fn discard_autosaves(dir: &Path) {
     }
 }
 
-/// Writes one copy of every STL file the layout uses into a new folder
-/// inside `dir`, named after the project, so nothing is ever overwritten.
-/// Files are named as in the print list. Returns the folder, how many files
-/// were written, and the tiles whose STL file is nowhere to be found.
+/// What File > Export STL files writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StlExport {
+    /// Only the files still to print after the prints owned, as counted in
+    /// the inventory.
+    pub left_only: bool,
+    /// How many to print in each file's name, `Floor 2x2 ×4.stl`.
+    pub counts: bool,
+}
+
+/// Writes one copy of each STL file in the print list `rows` into a new
+/// folder inside `dir`, named after the project, so nothing is ever
+/// overwritten, with `Print list.csv` beside them. Files are named as in
+/// the print list. Returns the folder, how many files were written, and the
+/// files that are nowhere to be found.
 pub fn export_stls(
-    state: &DocState,
+    rows: &[PrintRow],
     store: &EmbeddedStore,
-    names: &HashMap<TileKey, String>,
     dir: &Path,
     title: &str,
+    options: StlExport,
 ) -> Result<(PathBuf, usize, Vec<TileKey>), String> {
+    let rows: Vec<PrintRow> = rows.iter().filter(|r| !options.left_only || r.to_print() > 0).cloned().collect();
     let folder = new_folder(dir, &format!("{title} STL files"))?;
-    let mut seen = HashSet::new();
     let mut taken = HashSet::new();
     let (mut written, mut missing) = (0, Vec::new());
-    for t in &state.tiles {
-        if !seen.insert(t.key.clone()) {
-            continue;
-        }
-        let Ok(bytes) = embedded::bytes(&t.key, store) else {
-            missing.push(t.key.clone());
+    for row in &rows {
+        let Ok(bytes) = embedded::bytes(&row.key, store) else {
+            missing.push(row.key.clone());
             continue;
         };
-        let stem = clean_name(names.get(&t.key).map_or(t.key.stem(), String::as_str));
+        let n = if options.left_only { row.to_print() } else { row.count };
+        let stem =
+            clean_name(&if options.counts { format!("{} ×{n}", row.display_name) } else { row.display_name.clone() });
         let mut name = format!("{stem}.stl");
         let mut n = 2;
         while !taken.insert(name.to_lowercase()) {
@@ -460,6 +471,9 @@ pub fn export_stls(
         std::fs::write(&path, bytes).map_err(|e| format!("{} couldn't be written: {e}", path.display()))?;
         written += 1;
     }
+    let csv = mtp_export::write_csv(&rows, PathMode::Relative).map_err(|e| e.to_string())?;
+    let path = folder.join("Print list.csv");
+    std::fs::write(&path, csv).map_err(|e| format!("{} couldn't be written: {e}", path.display()))?;
     Ok((folder, written, missing))
 }
 
@@ -876,23 +890,49 @@ mod tests {
         assert!(library.folder(section).expect("section").tiles.contains(&key), "listed in the section too");
     }
 
+    fn row(key: &TileKey, name: &str, count: u32, owned: Option<u32>) -> PrintRow {
+        PrintRow {
+            key: key.clone(),
+            name: name.into(),
+            folder: "Packs".into(),
+            display_name: name.into(),
+            count,
+            size: mtp_core::units::TileSize { w: 2, h: 2, gz: 0.5 },
+            volume_mm3: None,
+            owned,
+        }
+    }
+
     #[test]
     fn exported_stl_files_go_into_a_new_folder() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let key = TileKey::new(FLOOR);
+        let (floor, wall) = (TileKey::new(FLOOR), TileKey::new(WALL));
         let gone = TileKey::new("C:/Gone/wall.stl");
-        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
-        state.tiles = vec![placed(1, &key, 2.0), placed(2, &key, 6.0), placed(3, &gone, 10.0)];
-        let names = HashMap::from([(key.clone(), "floor (Packs)".to_owned())]);
+        let rows = [row(&floor, "Floor 2x2", 3, Some(1)), row(&wall, "Wall", 2, Some(2)), row(&gone, "Gone", 1, None)];
         let store = EmbeddedStore::default();
-        let (folder, written, missing) =
-            export_stls(&state, &store, &names, dir.path(), "Crypt: level 1").expect("export");
+        let all = StlExport::default();
+        let (folder, written, missing) = export_stls(&rows, &store, dir.path(), "Crypt: level 1", all).expect("export");
         assert_eq!(folder, dir.path().join("Crypt_ level 1 STL files"));
-        assert_eq!((written, missing), (1, vec![gone]));
-        let copy = std::fs::read(folder.join("floor (Packs).stl")).expect("written");
+        assert_eq!((written, missing), (2, vec![gone.clone()]));
+        let copy = std::fs::read(folder.join("Floor 2x2.stl")).expect("written");
         assert_eq!(copy, std::fs::read(FLOOR).expect("fixture"));
-        let (second, ..) = export_stls(&state, &store, &names, dir.path(), "Crypt: level 1").expect("again");
+        let csv = std::fs::read_to_string(folder.join("Print list.csv")).expect("print list");
+        assert_eq!(csv.lines().count(), 4, "a header and every file, found or not");
+        let (second, ..) = export_stls(&rows, &store, dir.path(), "Crypt: level 1", all).expect("again");
         assert_eq!(second, dir.path().join("Crypt_ level 1 STL files (2)"), "never overwrites");
+
+        // What's left to print, counted in the names
+        let left = StlExport { left_only: true, counts: true };
+        let (folder, written, missing) = export_stls(&rows, &store, dir.path(), "Crypt", left).expect("export");
+        assert_eq!((written, missing), (1, vec![gone]));
+        let mut names: Vec<String> = std::fs::read_dir(&folder)
+            .expect("folder")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Floor 2x2 ×2.stl", "Print list.csv"], "the wall is owned twice already");
+        let csv = std::fs::read_to_string(folder.join("Print list.csv")).expect("print list");
+        assert!(!csv.contains("Wall") && csv.contains("Gone"), "{csv}");
     }
 
     #[test]
