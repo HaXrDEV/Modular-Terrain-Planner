@@ -257,7 +257,7 @@ impl App {
     fn problem(&mut self, text: impl Into<String>) {
         let text = text.into();
         tracing::warn!("{text}");
-        self.problems.push(Problem { text });
+        self.problems.push(Problem::new(text));
     }
 
     // ---- Files ------------------------------------------------------------
@@ -465,13 +465,13 @@ impl App {
             .with_pins_of(&self.embedded);
         let gone = self.library.set_embedded(keys);
         self.forget(gone);
+        panels::set_missing(&mut self.problems, &saved.missing);
         let note = match saved.missing.len() {
             0 => String::new(),
-            n => format!(
-                " {n} STL {} aren't on this computer, so {} saved without them.",
-                if n == 1 { "file" } else { "files" },
-                if n == 1 { "its tiles are" } else { "their tiles are" }
-            ),
+            1 => " One STL file isn't on this computer, so its tiles are saved without it (see Problems).".into(),
+            n => {
+                format!(" {n} STL files aren't on this computer, so their tiles are saved without them (see Problems).")
+            }
         };
         self.editor.tell(format!("Saved {}.{note}", path.display()));
     }
@@ -582,6 +582,28 @@ impl App {
                 self.dialog = Some(Dialog::Message { title: "Couldn't add the project's tiles".into(), text: e });
             }
         }
+    }
+
+    /// Points every tile using the missing STL file `key` at a file the
+    /// user picks, as one undo step, and adds its folder to the library.
+    fn locate(&mut self, key: &TileKey) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(format!("Where is {}?", key.file_name()))
+            .add_filter("STL file", &["stl", "STL"]);
+        let near =
+            [Path::new(key.folder()), self.editor.path.as_deref().and_then(Path::parent).unwrap_or(Path::new(""))];
+        if let Some(dir) = near.into_iter().find(|d| d.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(path) = dialog.pick_file() else { return };
+        let to = TileKey::from_path(&std::path::absolute(&path).unwrap_or(path.clone()));
+        let n = self.editor.doc.repoint("Locate STL file", &std::collections::HashMap::from([(key.clone(), to)]));
+        self.editor.changed();
+        if let Some(dir) = path.parent() {
+            self.library.add_folder(dir, false);
+        }
+        self.problems.retain(|p| p.missing.as_ref() != Some(key));
+        self.editor.tell(format!("{n} tiles use {} now.", path.display()));
     }
 
     fn autosave_tick(&mut self) {
@@ -1748,6 +1770,7 @@ impl App {
                     }
                 }
                 Request::AddProjectTiles => self.add_project_tiles(),
+                Request::Locate(key) => self.locate(&key),
                 Request::SampleTiles => match crate::samples::write(&self.paths.data.join("Sample tiles")) {
                     Ok(dir) => {
                         self.library.add_folder(&dir, false);
@@ -2064,7 +2087,10 @@ impl App {
                     self.problem(p);
                 }
             }
-            Tab::Problems => panels::problems(ui, &mut self.problems),
+            Tab::Problems => {
+                let requests = panels::problems(ui, &mut self.problems);
+                self.requests.extend(requests);
+            }
         }
     }
 }

@@ -838,6 +838,25 @@ mod tests {
     }
 
     #[test]
+    fn a_located_file_is_carried_on_the_next_save() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let gone = TileKey::new("C:/Gone/Tiles/floor.stl");
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = vec![placed(1, &gone, 2.0), placed(2, &gone, 6.0)];
+        let mut doc = Document::new(state);
+        let library = Library::new(None, 0, Arc::new(|| {}));
+        let path = dir.path().join("castle.mtp");
+        let saved = save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
+        assert_eq!((saved.missing, saved.embedded.len()), (vec![gone.clone()], 0));
+
+        let found = TileKey::from_path(&std::path::absolute(FLOOR).expect("absolute"));
+        assert_eq!(doc.repoint("Locate STL file", &HashMap::from([(gone, found.clone())])), 2);
+        let saved = save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
+        assert!(saved.missing.is_empty());
+        assert_eq!(saved.embedded.iter().map(|(k, _)| k).collect::<Vec<_>>(), [&found]);
+    }
+
+    #[test]
     fn identical_files_share_one_entry() {
         let dir = tempfile::tempdir().expect("temp dir");
         let mut keys = Vec::new();

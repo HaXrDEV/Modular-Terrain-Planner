@@ -21,6 +21,9 @@ still opens.
   files that aren't on this computer into a folder in the library.
 - Export STL files can write only what's left to print, with the counts
   in the file names, and puts Print list.csv beside them.
+- STL files a save couldn't carry, being neither on this computer nor in
+  the project, are listed in Problems with Locate… to point their tiles
+  at another file.
 
 ## 0.5.0 (unreleased)
 
