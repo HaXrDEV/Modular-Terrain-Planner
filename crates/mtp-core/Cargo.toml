@@ -1,0 +1,13 @@
+[package]
+name = "mtp-core"
+description = "Grid, rules, history and project files of Modular Terrain Planner, with no GPU or UI code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -30,3 +30,6 @@ dist/
 
 # Generated build artefacts
 gui/icons/app_icon.ico
+
+# Rust
+/target/

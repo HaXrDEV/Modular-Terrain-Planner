@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # egui_dock trails egui by a release, so the egui family moves together
+      egui:
+        patterns: ["egui*", "eframe", "epaint*", "emath", "ecolor"]
+      wgpu:
+        patterns: ["wgpu*", "naga"]
+      everything-else:
+        patterns: ["*"]
+        exclude-patterns: ["egui*", "eframe", "epaint*", "emath", "ecolor", "wgpu*", "naga"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
