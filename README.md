@@ -4,110 +4,97 @@
 </p>
 
 <p align="center">
-  Lay out a dungeon from your modular terrain STL files,<br>
-  then print exactly the tiles it needs and build it from the plan.
+  A desktop app for laying out dungeons from modular terrain STL files,<br>
+  then printing exactly the tiles the layout needs.
 </p>
 
 <p align="center">
-  <a href="https://github.com/HaXrDEV/modular-terrain-planner/releases/latest"><img src="https://img.shields.io/github/v/release/HaXrDEV/modular-terrain-planner?include_prereleases&style=flat-square&label=version&color=c87020" alt="Version"></a>
+  <a href="https://github.com/HaXrDEV/modular-terrain-planner/releases/latest"><img src="https://img.shields.io/github/v/release/HaXrDEV/modular-terrain-planner?include_prereleases&style=flat-square&label=version&color=c97d1f" alt="Version"></a>
   <a href="https://github.com/HaXrDEV/modular-terrain-planner/actions/workflows/checks.yml"><img src="https://img.shields.io/github/actions/workflow/status/HaXrDEV/modular-terrain-planner/checks.yml?branch=main&style=flat-square&label=checks" alt="Checks"></a>
-  <img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555?style=flat-square" alt="Windows, macOS and Linux">
-  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-1.95%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.95 or newer"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555?style=flat-square" alt="Windows, macOS and Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="MIT license"></a>
 </p>
 
 <p align="center">
   <a href="#features">Features</a> ·
   <a href="#install">Install</a> ·
-  <a href="#using-it">Using it</a> ·
-  <a href="#files-and-privacy">Files and privacy</a> ·
+  <a href="#usage">Usage</a> ·
   <a href="#development">Development</a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshot-light.png#gh-light-mode-only" alt="A dungeon of stone floors and brick walls in Modular Terrain Planner" width="900">
-  <img src="docs/screenshot-dark.png#gh-dark-mode-only" alt="A dungeon of stone floors and brick walls in Modular Terrain Planner" width="900">
+  <img src="docs/screenshot-light.png#gh-light-mode-only" alt="A two-level dungeon of flagstone floors, brick walls, doors and stairs in Modular Terrain Planner" width="900">
+  <img src="docs/screenshot-dark.png#gh-dark-mode-only" alt="A two-level dungeon of flagstone floors, brick walls, doors and stairs in Modular Terrain Planner" width="900">
 </p>
 
 ## Features
 
-| Part | What it does |
+| Feature | What it does |
 | :--- | :--- |
-| **Library** | Opens folders of STL files (OpenForge, Dragonlock and the like), with pictures, search and footprint filters. Each tile's size in grid cells comes from the file, inches included. |
-| **Layout** | Place, paint, fill, move, turn, copy and stack tiles on a grid in 2D or 3D, on as many levels as the dungeon has floors. Tiles stack only on a level surface, and a red ghost says why a spot won't work. |
-| **Battle map** | Lays an image under the grid to build on. |
-| **Print list** | Shows what to print for the layout after what you already own, with filament, cost and build plate estimates, and remembers your prints across projects. |
-| **Build plan** | A PDF with a numbered map that shows which way each tile faces, a print list per STL file and a table of every placement. Also a PNG map and a CSV print list. |
+| **Tile library** | Opens folders of STL tiles, such as OpenForge or Dragonlock, sized from each file |
+| **Layout** | Paint, fill, turn and stack tiles in 2D or 3D, across levels and over a battle map |
+| **Smart tools** | Stamps, tile variants, walls around a room and a measuring tool |
+| **Print list** | What to print after the tiles you own, with filament, cost and build plate estimates |
+| **Build plan** | A PDF with a numbered map and every placement, plus a PNG map and a CSV |
 
-- **Fast.** Thousands of tiles stay smooth, far-away tiles are drawn with less detail, and a library opens instantly the second time.
-- **Nothing is lost.** Tiles whose STL is missing are kept and saved as they are, saves never leave a half-written file, and unsaved work is recovered after a crash.
-- **Projects travel.** Paths are saved relative to the project, so a project and its tiles can move together, also between Windows, macOS and Linux.
+- **Fast.** Thousands of tiles stay smooth, and a library opens instantly the second time.
+- **Safe.** Saves are atomic, unsaved work survives a crash, and tiles with a missing STL are kept.
+- **Offline.** No account and no telemetry. Projects are plain JSON files with relative paths.
 
-1 grid cell is 12.5 mm, so a 1" battle-map square is 2 × 2 cells.
+The grid is 12.5 mm, so a 1" battle map square is 2 × 2 cells.
 
 ## Install
 
-Download the file for your system from the [latest release](https://github.com/HaXrDEV/modular-terrain-planner/releases/latest):
+Download the latest version from [Releases](https://github.com/HaXrDEV/modular-terrain-planner/releases/latest).
 
-| System | File |
+| Platform | Download |
 | :--- | :--- |
-| Windows 10 or 11 | `…-windows-x64-setup.exe` installs it for you (no administrator rights), or unzip `…-windows-x64.zip` anywhere |
-| macOS 11 or newer | Unzip `…-macos-universal.zip` and move the app to Applications |
-| Linux (glibc 2.35 or newer) | `chmod +x` the `…-linux-x86_64.AppImage` and run it, or unpack `…-linux-x64.tar.gz` and run `./install.sh` |
+| Windows 10 and 11 | Installer (`.exe`) or portable `.zip` |
+| macOS 11 and later | Universal app (`.zip`) |
+| Linux (glibc 2.35 and later) | `.AppImage` or `.tar.gz` |
 
-The downloads aren't code-signed, so the first start asks once:
+> [!NOTE]
+> The downloads aren't code-signed. On first launch, choose **More info › Run anyway** in Windows SmartScreen, or **Open Anyway** under **System Settings › Privacy & Security** on macOS.
 
-- **Windows:** SmartScreen protected your PC. Choose *More info*, then *Run anyway*.
-- **macOS:** Apple can't check the app. Open *System Settings > Privacy & Security* and choose *Open Anyway*.
+Needs a graphics card with Vulkan, DirectX 12, Metal or OpenGL 3.3. If the view stays blank, choose OpenGL in **View › Settings**. Projects from version 0.4 and earlier open unchanged.
 
-The app draws with Vulkan, DirectX 12, Metal or OpenGL 3.3, so most graphics cards from the last ten years work. If the view stays blank, update the graphics driver, or pick *OpenGL* under *View > Settings > Graphics*.
+## Usage
 
-Projects from the Python version (0.4 and earlier) open as they are. That version is tagged [`python-final`](https://github.com/HaXrDEV/modular-terrain-planner/tree/python-final).
+1. Add a folder of STL tiles with **File › Add tile folder**, or try the sample tiles.
+2. Pick a tile in the library, then click or drag on the grid to place it.
+3. Export the build plan with <kbd>Ctrl</kbd>+<kbd>E</kbd>.
 
-## Using it
+<kbd>Ctrl</kbd>+<kbd>K</kbd> finds any command or tile, and <kbd>F1</kbd> lists every shortcut. On macOS, use <kbd>Cmd</kbd> for <kbd>Ctrl</kbd>.
 
-Add a folder of STL files with **File > Add tile folder** (or drop it onto the window), or try the sample tiles. Click a tile in the library, then click or drag on the grid to place it.
+<details>
+<summary><b>Common shortcuts</b></summary>
+<br>
 
-| To | Do this |
+| Action | Shortcut |
 | :--- | :--- |
-| Place, select, erase | Click a tile in the library, press **V** for Select, **X** for Erase |
-| Fill a room, draw a wall | **Shift**+drag fills a rectangle, **Shift**+click draws a line from the last tile |
-| Switch tiles quickly | **1** to **9** pick a recently placed tile |
-| Turn | **Q** and **E** |
-| Mix in variants | **C** and **Shift+C** cycle through tiles of the same size; *Edit > Randomise variants* mixes them into a selection |
-| Wall in a room | Select its floor, then *Edit > Add walls around selection* |
-| Reuse a room or corridor | *Edit > Save selection as stamp*, then click it under Stamps in the library |
-| Move the selection | Drag it, or use the arrow keys |
-| Place freely, off the grid | Hold **Ctrl** |
-| Pick up a placed tile | **Alt**+click it |
-| Build another floor | **Page Up** and **Page Down**, or the Levels box in the view |
-| Measure | **M**, then drag: the length in cells, inches and millimetres |
-| Look around | Right drag to orbit, middle drag to pan, wheel to zoom, **T** for 2D or 3D |
-| Export the build plan | **Ctrl+E** |
+| Select, erase, measure | <kbd>V</kbd> <kbd>X</kbd> <kbd>M</kbd> |
+| Turn | <kbd>Q</kbd> <kbd>E</kbd> |
+| Fill a rectangle, draw a line | <kbd>Shift</kbd>+drag, <kbd>Shift</kbd>+click |
+| Recent tiles | <kbd>1</kbd> to <kbd>9</kbd> |
+| Next variant of a tile | <kbd>C</kbd> |
+| Place off the grid | Hold <kbd>Ctrl</kbd> |
+| Pick up a placed tile | <kbd>Alt</kbd>+click |
+| Level up or down | <kbd>Page Up</kbd> <kbd>Page Down</kbd> |
+| Switch 2D and 3D | <kbd>T</kbd> |
+| Orbit, pan, zoom | Right drag, middle drag, wheel |
 
-**Ctrl+K** finds any command or tile by name, and **Help > Keyboard and mouse** lists everything else.
-
-## Files and privacy
-
-The app never uses the network. Projects are `.mtp` files (JSON) wherever you save them. Settings, logs, autosaves and the mesh cache stay in the app's own folders, which *Help > About* shows:
-
-- Windows: `%APPDATA%` and `%LOCALAPPDATA%\Modular Terrain Planner`
-- macOS: `~/Library/Application Support` and `~/Library/Caches`
-- Linux: `~/.config`, `~/.local/share` and `~/.cache`
+</details>
 
 ## Development
 
 Install [Rust](https://rustup.rs), then:
 
 ```bash
-cargo run
-```
-
-```bash
+cargo run --release
 cargo test --workspace
 ```
 
-[How it works](docs/how-it-works.md) explains loading, the placement rules and drawing. [The project format](docs/project-format.md) describes `.mtp` files, and [Contributing](CONTRIBUTING.md) the branch and pull request routine.
+[How it works](docs/how-it-works.md) covers loading, the placement rules and drawing. [The project format](docs/project-format.md) describes `.mtp` files, and [Contributing](CONTRIBUTING.md) the branch and pull request routine.
 
 ## License
 
