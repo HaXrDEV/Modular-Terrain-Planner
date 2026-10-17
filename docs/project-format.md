@@ -9,9 +9,11 @@ writes version 6 and reads every version since 1.
 | Entry | Holds |
 | :--- | :--- |
 | `project.json` | The project, below. |
-| `stl/<folder>/<file>` | One copy of each STL file the tiles use, compressed. `<folder>` is the name of the tile folder it came from, `<file>` its path inside that folder. |
+| `stl/<folder>/<file>` | One copy of each STL file the tiles use, compressed. `<folder>` is the name of the tile folder it came from, `<file>` its path inside that folder. Identical files from two folders share one entry. |
 
 Renaming a project to `.zip` shows its STL files under their own names.
+Each entry's size and CRC32 are checked when it's read, so a damaged copy is
+reported rather than loaded wrong.
 
 A tile uses its STL file on this computer when it's there, and the copy
 inside the project when it isn't. Saving refreshes the copies from disk, so
@@ -57,7 +59,7 @@ uncompressed, which is quicker.
 | `rotation` | 0, 90, 180 or 270: counter-clockwise, seen from above. |
 | `level` | The floor of a multi-storey layout. Left out when 0. |
 | `size` | Footprint and height in cells, as last read from the STL. Lets a tile whose STL is missing keep its place and size. |
-| `embedded` | The STL files inside the container: the folder and file a tile names, and the entry holding it. |
+| `embedded` | The STL files inside the container: the folder and file a tile names, and the entry holding it. Records for identical files share an entry. |
 | `ground_image` | The battle map: `rect` is `[x, y, width, depth]` in cells. The image itself isn't inside the project. |
 
 When opening, each folder is looked for relative to the project first, then

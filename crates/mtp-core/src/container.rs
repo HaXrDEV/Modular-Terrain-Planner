@@ -355,6 +355,21 @@ endsolid
     }
 
     #[test]
+    fn a_damaged_entry_is_an_error_not_a_wrong_file() {
+        let mut file = project();
+        name_entries(&mut file);
+        file.embedded.truncate(1);
+        let stl = b"solid floor\nendsolid floor\n".repeat(20);
+        let mut bytes = write(&file, "0.5.0", std::slice::from_ref(&stl), false).expect("write");
+        let at = bytes.windows(stl.len()).position(|w| w == stl.as_slice()).expect("stored as it is");
+        bytes[at + 6] ^= 0x20;
+        let mut inside = Embedded::new(Cursor::new(&bytes)).expect("open");
+        assert_eq!(inside.fingerprint(&file.embedded[0].entry), Some(Fingerprint::of(&stl)));
+        let error = inside.read(&file.embedded[0].entry).expect_err("the CRC32 doesn't match");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn files_on_disk_compare_by_size_then_crc() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("floor.stl");

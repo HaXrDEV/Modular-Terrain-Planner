@@ -14,7 +14,7 @@ still opens.
   lists them under In this project, and File > Export STL files writes
   them out for printing.
 - Saving runs in the background, and saving again only packs the STL
-  files that changed, so it's quick.
+  files that changed, so it's quick. Identical files are stored once.
 
 ## 0.5.0 (unreleased)
 

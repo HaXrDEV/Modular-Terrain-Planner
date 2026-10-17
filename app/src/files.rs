@@ -4,11 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{self, BufWriter, Seek, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use mtp_core::container::{self, Embedded};
+use mtp_core::container::{self, Embedded, Fingerprint};
 use mtp_core::document::{DocState, GroundImage};
 use mtp_core::persist::{write_atomic, write_atomic_with};
 use mtp_core::project::{self, LibraryFolder, ProjectFile};
@@ -193,8 +193,8 @@ pub fn plan_save(state: &DocState, library: &Library, store: &EmbeddedStore, pat
 /// Writes a planned save atomically, keeping the previous file as `.bak`
 /// with `keep_backup`. New and changed STL files are compressed with
 /// `compress`; unchanged ones are copied from the project being replaced as
-/// they are, which is what makes saving again quick. `progress` hears how
-/// many STL files are done.
+/// they are, which is what makes saving again quick. Identical files from
+/// two folders share one entry. `progress` hears how many STL files are done.
 pub fn write_save(
     plan: SavePlan,
     path: &Path,
@@ -202,14 +202,44 @@ pub fn write_save(
     compress: bool,
     progress: &dyn Fn(usize),
 ) -> Result<Saved, String> {
-    let SavePlan { file, sources, saved } = plan;
+    let SavePlan { mut file, sources, mut saved } = plan;
     write_atomic_with(path, keep_backup, |f| {
-        // The containers copies come from, each opened once
-        let mut archives: HashMap<PathBuf, Option<Embedded<File>>> = HashMap::new();
+        let mut archives = Archives::default();
         let mut out = container::Writer::new(BufWriter::new(f), compress);
-        for (i, (record, source)) in file.embedded.iter().zip(&sources).enumerate() {
-            write_entry(&mut out, &mut archives, &record.entry, source)
-                .map_err(|e| io::Error::other(format!("{}: {e}", source.key.as_str())))?;
+        // Entries written so far, by contents
+        let mut written: HashMap<Fingerprint, Vec<Written>> = HashMap::new();
+        for (i, source) in sources.iter().enumerate() {
+            let fail = |e: io::Error| io::Error::other(format!("{}: {e}", source.key.as_str()));
+            let contents = source.contents(&mut archives).map_err(fail)?;
+            let fingerprint = contents.fingerprint();
+            let mut twin = None;
+            for (j, copied) in written.get(&fingerprint).into_iter().flatten() {
+                let earlier = match copied {
+                    Some((archive, inside)) => archives.read(archive, inside),
+                    None => sources[*j].read(),
+                };
+                // The same size and CRC32 is almost surely the same file; the bytes make sure
+                if contents.same_as(&earlier.map_err(fail)?, &mut archives).map_err(fail)? {
+                    twin = Some(*j);
+                    break;
+                }
+            }
+            if let Some(j) = twin {
+                file.embedded[i].entry = file.embedded[j].entry.clone();
+            } else {
+                let entry = &file.embedded[i].entry;
+                let copied = match contents {
+                    Contents::Copy { archive, inside, .. } => {
+                        out.copy(archives.open(&archive)?, &inside, entry).map_err(fail)?;
+                        Some((archive, inside))
+                    }
+                    Contents::Bytes(bytes) => {
+                        out.add(entry, &bytes).map_err(fail)?;
+                        None
+                    }
+                };
+                written.entry(fingerprint).or_default().push((i, copied));
+            }
             progress(i + 1);
         }
         let out = out.finish(&file, VERSION)?;
@@ -218,34 +248,82 @@ pub fn write_save(
         out.into_inner().map_err(io::IntoInnerError::into_error)?.flush()
     })
     .map_err(|e| format!("{} couldn't be saved: {e}", path.display()))?;
+    saved.embedded = sources.iter().zip(&file.embedded).map(|(s, r)| (s.key.clone(), r.entry.clone())).collect();
     Ok(saved)
 }
 
-/// Writes one STL file into a container: copied as it is from the project
-/// being replaced when the file on disk is the same or isn't there, else
-/// read (from disk when it's there) and added.
-fn write_entry<W: Write + Seek>(
-    out: &mut container::Writer<W>,
-    archives: &mut HashMap<PathBuf, Option<Embedded<File>>>,
-    entry: &str,
-    source: &Source,
-) -> io::Result<()> {
-    let disk = Path::new(source.key.as_str());
-    if let Some(Stored::Archive { path, entry: inside }) = &source.stored
-        && let Some(archive) = archives.entry(path.clone()).or_insert_with(|| Embedded::open(path).ok())
-        // A file on disk that can't be read counts as not there
-        && archive.fingerprint(inside).is_some_and(|fp| fp.matches_file(disk).unwrap_or(true))
-    {
-        return out.copy(archive, inside, entry);
+/// A record whose entry was written, and the entry of the project being
+/// replaced it was copied from, if it was.
+type Written = (usize, Option<(PathBuf, String)>);
+
+/// The containers copies come from, each opened once.
+#[derive(Default)]
+struct Archives(HashMap<PathBuf, Option<Embedded<File>>>);
+
+impl Archives {
+    fn open(&mut self, path: &Path) -> io::Result<&mut Embedded<File>> {
+        self.0
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Embedded::open(path).ok())
+            .as_mut()
+            .ok_or_else(|| io::Error::other(format!("{} can't be read", path.display())))
     }
-    let bytes = match std::fs::read(disk) {
-        Ok(bytes) => bytes,
-        Err(e) => match &source.stored {
-            Some(stored) => stored.read()?,
-            None => return Err(e),
-        },
-    };
-    out.add(entry, &bytes)
+
+    fn read(&mut self, path: &Path, entry: &str) -> io::Result<Vec<u8>> {
+        self.open(path)?.read(entry)
+    }
+}
+
+/// What goes into one entry.
+enum Contents {
+    /// An entry of the project being replaced, copied as it is.
+    Copy { archive: PathBuf, inside: String, fingerprint: Fingerprint },
+    /// The file's bytes.
+    Bytes(Vec<u8>),
+}
+
+impl Contents {
+    fn fingerprint(&self) -> Fingerprint {
+        match self {
+            Self::Copy { fingerprint, .. } => *fingerprint,
+            Self::Bytes(bytes) => Fingerprint::of(bytes),
+        }
+    }
+
+    fn same_as(&self, bytes: &[u8], archives: &mut Archives) -> io::Result<bool> {
+        Ok(match self {
+            Self::Copy { archive, inside, .. } => archives.read(archive, inside)? == bytes,
+            Self::Bytes(mine) => mine == bytes,
+        })
+    }
+}
+
+impl Source {
+    /// The copy in the project being replaced when the file on disk is the
+    /// same or isn't there, else the file's bytes.
+    fn contents(&self, archives: &mut Archives) -> io::Result<Contents> {
+        let disk = Path::new(self.key.as_str());
+        if let Some(Stored::Archive { path, entry }) = &self.stored
+            && let Ok(archive) = archives.open(path)
+            && let Some(fingerprint) = archive.fingerprint(entry)
+            // A file on disk that can't be read counts as not there
+            && fingerprint.matches_file(disk).unwrap_or(true)
+        {
+            return Ok(Contents::Copy { archive: path.clone(), inside: entry.clone(), fingerprint });
+        }
+        self.read().map(Contents::Bytes)
+    }
+
+    /// The file's bytes: from disk when it's there, else the copy.
+    fn read(&self) -> io::Result<Vec<u8>> {
+        match std::fs::read(self.key.as_str()) {
+            Ok(bytes) => Ok(bytes),
+            Err(e) => match &self.stored {
+                Some(stored) => stored.read(),
+                None => Err(e),
+            },
+        }
+    }
 }
 
 /// Adds the extension when the file dialog didn't.
@@ -557,6 +635,40 @@ mod tests {
         std::fs::remove_file(&stl).expect("remove");
         save_project(&doc, &library, &store, &path).expect("save over the project it copies from");
         assert_eq!(inside(&path), (Some(true), std::fs::read(FLOOR).expect("fixture")));
+    }
+
+    #[test]
+    fn identical_files_share_one_entry() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut keys = Vec::new();
+        for (pack, source) in [("A", FLOOR), ("B", FLOOR), ("C", WALL)] {
+            let tiles = dir.path().join(pack).join("Tiles");
+            std::fs::create_dir_all(&tiles).expect("folder");
+            std::fs::copy(source, tiles.join("floor.stl")).expect("copy");
+            keys.push(TileKey::from_path(&tiles.join("floor.stl")));
+        }
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.tiles = keys.iter().enumerate().map(|(i, k)| placed(i as u64 + 1, k, i as f32 * 4.0)).collect();
+        let doc = Document::new(state);
+        let library = Library::new(None, 0, Arc::new(|| {}));
+        let path = dir.path().join("castle.mtp");
+        let saved = save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
+        let entries: Vec<&str> = saved.embedded.iter().map(|(_, e)| e.as_str()).collect();
+        assert_eq!(entries, ["stl/Tiles/floor.stl", "stl/Tiles/floor.stl", "stl/Tiles (3)/floor.stl"]);
+        assert!(Embedded::open(&path).expect("open").fingerprint("stl/Tiles (2)/floor.stl").is_none());
+
+        // Opened on another computer, both tiles find the one copy, and
+        // saving from the copies keeps sharing it
+        for pack in ["A", "B", "C"] {
+            std::fs::remove_dir_all(dir.path().join(pack)).expect("remove");
+        }
+        let pending = read_project(&path).expect("reopen");
+        assert_eq!(pending.file.embedded.len(), 3);
+        let store = embedded_store(&pending);
+        assert_eq!(embedded::bytes(&keys[1], &store).expect("inside"), std::fs::read(FLOOR).expect("fixture"));
+        assert_eq!(embedded::bytes(&keys[2], &store).expect("inside"), std::fs::read(WALL).expect("fixture"));
+        let again = save_project(&Document::new(finish_open(&pending)), &library, &store, &path).expect("save");
+        assert_eq!(again.embedded, saved.embedded);
     }
 
     #[test]
