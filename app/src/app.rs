@@ -59,6 +59,9 @@ enum Dialog {
         id: FolderId,
         in_use: Vec<PlacedId>,
     },
+    SaveStamp {
+        name: String,
+    },
     Recovery(Vec<Autosave>),
     Crash(String),
     Message {
@@ -77,6 +80,7 @@ pub struct App {
     renderer: Renderer,
     library: Library,
     inventory: crate::inventory::Inventory,
+    stamps: crate::stamps::Stamps,
     editor: Editor,
     viewport: Viewport,
     library_panel: LibraryPanel,
@@ -138,6 +142,7 @@ impl App {
         });
 
         let (inventory, inventory_problem) = crate::inventory::Inventory::load(&paths.data);
+        let (stamps, stamps_problem) = crate::stamps::Stamps::load(&paths.data);
         let projection = if settings.start_in_3d { Projection::Perspective } else { Projection::TopDown };
         let grid = GridSize::DEFAULT;
         let mut app = Self {
@@ -148,6 +153,7 @@ impl App {
             renderer,
             library,
             inventory,
+            stamps,
             library_panel: LibraryPanel::default(),
             dock,
             problems: Vec::new(),
@@ -184,7 +190,7 @@ impl App {
             app.library.add_folder(dir, true);
         }
         app.editor.level_view = app.settings.level_view;
-        if let Some(p) = inventory_problem {
+        for p in [inventory_problem, stamps_problem].into_iter().flatten() {
             app.problem(p);
         }
         for problem in startup.problems {
@@ -487,6 +493,13 @@ impl App {
             }
             Command::Delete => self.editor.delete_selection(),
             Command::SelectAll => self.editor.select_all(),
+            Command::SaveStamp => {
+                if self.editor.selection.is_empty() {
+                    self.editor.warn("Select the tiles to save as a stamp first.");
+                } else {
+                    self.dialog = Some(Dialog::SaveStamp { name: String::new() });
+                }
+            }
             Command::SelectSame => {
                 if let Some(key) = self.editor.selected_tiles().first().map(|t| t.key.clone()) {
                     self.editor.select_same(&key);
@@ -890,6 +903,7 @@ impl App {
                 item(ui, Command::Delete, sel, &mut chosen);
                 item(ui, Command::SelectAll, true, &mut chosen);
                 item(ui, Command::SelectSame, sel, &mut chosen);
+                item(ui, Command::SaveStamp, sel, &mut chosen);
                 item(ui, Command::RandomiseVariants, sel, &mut chosen);
                 ui.separator();
                 item(ui, Command::TurnLeft, true, &mut chosen);
@@ -1217,6 +1231,42 @@ impl App {
                 });
                 Dialog::Crash(report)
             }
+            Dialog::SaveStamp { mut name } => {
+                let n = self.editor.selection.len();
+                egui::Modal::new(egui::Id::new("save stamp")).show(ctx, |ui| {
+                    ui.heading("Save as stamp");
+                    ui.label(format!("Keeps the {n} selected tiles to paste into any project."));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Name, such as Corridor 2x6"));
+                    edit.request_focus();
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if self.stamps.list.iter().any(|s| s.name == name.trim()) {
+                        ui.label(
+                            RichText::new(format!("This replaces the stamp {}.", name.trim()))
+                                .color(ui.visuals().warn_fg_color),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        let ok = !name.trim().is_empty();
+                        if ui.add_enabled(ok, egui::Button::new("Save")).clicked() || (ok && enter) {
+                            let name = name.trim().to_owned();
+                            then = Some(Box::new(move |app: &mut Self| {
+                                let tiles = app.editor.selected_tiles();
+                                if let Some(clip) = crate::editor::Clipboard::from_tiles(&tiles) {
+                                    match app.stamps.add(name.clone(), clip) {
+                                        Ok(()) => app.editor.tell(format!("Saved the stamp {name}.")),
+                                        Err(e) => app.problem(e),
+                                    }
+                                }
+                            }));
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                Dialog::SaveStamp { name }
+            }
             Dialog::Message { title, text } => {
                 egui::Modal::new(egui::Id::new("message")).show(ctx, |ui| {
                     ui.heading(&title);
@@ -1288,6 +1338,18 @@ impl App {
                 Request::GridSize => {
                     let g = self.editor.doc.grid();
                     self.dialog = Some(Dialog::GridSize { cols: g.cols, rows: g.rows, from_left: false });
+                }
+                Request::UseStamp(i) => {
+                    if let Some(s) = self.stamps.list.get(i) {
+                        self.editor.clipboard = Some(s.tiles.clone());
+                        self.editor.tool = Tool::Paste;
+                        self.editor.tell(format!("Pasting {}: click to place it.", s.name));
+                    }
+                }
+                Request::DeleteStamp(i) => {
+                    if let Err(e) = self.stamps.remove(i) {
+                        self.problem(e);
+                    }
                 }
                 Request::SampleTiles => match crate::samples::write(&self.paths.data.join("Sample tiles")) {
                     Ok(dir) => {
@@ -1550,7 +1612,13 @@ impl App {
     fn tab_ui(&mut self, ui: &mut egui::Ui, tab: Tab) {
         match tab {
             Tab::Library => {
-                let requests = self.library_panel.ui(ui, &self.library, &mut self.editor, self.settings.thumbnail_size);
+                let requests = self.library_panel.ui(
+                    ui,
+                    &self.library,
+                    &mut self.editor,
+                    &self.stamps.list,
+                    self.settings.thumbnail_size,
+                );
                 self.requests.extend(requests);
             }
             Tab::View => self.viewport.ui(

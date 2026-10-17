@@ -48,7 +48,7 @@ pub struct Clipboard {
 }
 
 impl Clipboard {
-    fn from_tiles(tiles: &[&Placed]) -> Option<Self> {
+    pub fn from_tiles(tiles: &[&Placed]) -> Option<Self> {
         let min_x = tiles.iter().map(|t| t.x).fold(f32::INFINITY, f32::min);
         let min_y = tiles.iter().map(|t| t.y).fold(f32::INFINITY, f32::min);
         let min_z = tiles.iter().map(|t| t.z).fold(f32::INFINITY, f32::min);

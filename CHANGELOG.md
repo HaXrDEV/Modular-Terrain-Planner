@@ -23,6 +23,8 @@ saving writes format version 5, which earlier versions can't open.
 - Variants: C and Shift+C cycle through tiles of the same size from the
   same pack, and Randomise variants mixes them into a selection so a
   floor doesn't repeat one tile.
+- Stamps: save a selection (a corridor, a room) under a name and paste
+  it into any project.
 - A measure tool (M) giving lengths in cells, inches and millimetres.
 - A red, hatched ghost and a reason when a tile can't go somewhere.
 - A Print List panel: how many of each STL the layout needs, how many you

@@ -35,6 +35,8 @@ pub enum Request {
     ClearBattleMap,
     GridSize,
     SampleTiles,
+    UseStamp(usize),
+    DeleteStamp(usize),
 }
 
 pub fn size_text(size: TileSize) -> String {
@@ -46,7 +48,14 @@ pub fn size_text(size: TileSize) -> String {
 }
 
 impl LibraryPanel {
-    pub fn ui(&mut self, ui: &mut egui::Ui, library: &Library, editor: &mut Editor, thumb: f32) -> Vec<Request> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        library: &Library,
+        editor: &mut Editor,
+        stamps: &[crate::stamps::Stamp],
+        thumb: f32,
+    ) -> Vec<Request> {
         let mut requests = Vec::new();
         ui.horizontal(|ui| {
             if ui.button("Add folder…").on_hover_text("Load every STL file in a folder").clicked() {
@@ -102,6 +111,31 @@ impl LibraryPanel {
                     }
                 }
             });
+        }
+        if !stamps.is_empty() {
+            egui::CollapsingHeader::new(format!("Stamps ({})", stamps.len()))
+                .id_salt("stamps")
+                .default_open(true)
+                .show(ui, |ui| {
+                    for (i, s) in stamps.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            let n = s.tiles.items.len();
+                            if ui
+                                .selectable_label(false, &s.name)
+                                .on_hover_text(format!(
+                                    "{n} tiles, {:.0} x {:.0} cells. Click to paste.",
+                                    s.tiles.w, s.tiles.h
+                                ))
+                                .clicked()
+                            {
+                                requests.push(Request::UseStamp(i));
+                            }
+                            if ui.small_button("✕").on_hover_text("Delete this stamp").clicked() {
+                                requests.push(Request::DeleteStamp(i));
+                            }
+                        });
+                    }
+                });
         }
         ui.separator();
 

@@ -26,6 +26,7 @@ pub enum Command {
     Delete,
     SelectAll,
     SelectSame,
+    SaveStamp,
     NextVariant,
     PreviousVariant,
     RandomiseVariants,
@@ -95,6 +96,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec { command: Command::Delete, label: "Delete", shortcut: key(NONE, Key::Delete), group: "Edit" },
     Spec { command: Command::SelectAll, label: "Select all", shortcut: key(CMD, Key::A), group: "Edit" },
     Spec { command: Command::SelectSame, label: "Select all of this tile", shortcut: None, group: "Edit" },
+    Spec { command: Command::SaveStamp, label: "Save selection as stamp…", shortcut: None, group: "Edit" },
     Spec {
         command: Command::NextVariant,
         label: "Next tile of the same size",

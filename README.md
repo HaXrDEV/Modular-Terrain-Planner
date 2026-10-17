@@ -75,6 +75,7 @@ Add a folder of STL files with **File > Add tile folder** (or drop it onto the w
 | Switch tiles quickly | **1** to **9** pick a recently placed tile |
 | Turn | **Q** and **E** |
 | Mix in variants | **C** and **Shift+C** cycle through tiles of the same size; *Edit > Randomise variants* mixes them into a selection |
+| Reuse a room or corridor | *Edit > Save selection as stamp*, then click it under Stamps in the library |
 | Move the selection | Drag it, or use the arrow keys |
 | Place freely, off the grid | Hold **Ctrl** |
 | Pick up a placed tile | **Alt**+click it |

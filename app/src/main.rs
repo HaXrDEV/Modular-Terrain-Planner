@@ -14,6 +14,7 @@ mod panels;
 mod samples;
 mod selftest;
 mod settings;
+mod stamps;
 mod viewport;
 
 use std::path::PathBuf;
