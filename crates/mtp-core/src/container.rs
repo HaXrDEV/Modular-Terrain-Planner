@@ -3,7 +3,8 @@
 //!
 //! - `project.json`: the project, with an `embedded` table pointing each STL
 //!   file a tile uses at its entry;
-//! - `stl/<folder>/<file>`: the STL files, each stored once.
+//! - `stl/<folder>/<file>`: the STL files, each stored once;
+//! - `images/<file>`: the battle map, if there is one.
 //!
 //! Renaming a project to `.zip` shows its STL files under their own names.
 //! Formats 1 to 5 are plain JSON and are still read.
@@ -58,6 +59,12 @@ pub fn read_container(reader: impl Read + Seek) -> Result<ProjectFile, ProjectEr
         file.warnings.push(format!(
             "{lost} STL files the project lists weren't inside it. Their tiles use the files on disk if they're there."
         ));
+    }
+    if let Some(img) = &mut file.ground_image
+        && img.entry.as_ref().is_some_and(|e| zip.index_for_name(e).is_none())
+    {
+        img.entry = None;
+        file.warnings.push("The battle map wasn't inside the project. The file on disk is used if it's there.".into());
     }
     Ok(file)
 }
@@ -165,6 +172,15 @@ impl<W: Write + Seek> Writer<W> {
         self.zip.write_all(bytes)
     }
 
+    /// Adds an image, stored as it is: packing an image again gains nothing.
+    pub fn add_image(&mut self, entry: &str, bytes: &[u8]) -> io::Result<()> {
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .large_file(bytes.len() as u64 >= u64::from(u32::MAX));
+        self.zip.start_file(entry, options).map_err(io::Error::other)?;
+        self.zip.write_all(bytes)
+    }
+
     /// Copies an entry of another container as it is stored there, as
     /// `as_entry`: no unpacking and packing again, so an unchanged file
     /// costs no more than copying its bytes.
@@ -196,8 +212,13 @@ pub fn write(file: &ProjectFile, app_version: &str, stls: &[Vec<u8>], compress: 
 }
 
 /// Lists every STL file the tiles use in `file.embedded`, once each, under
-/// a readable entry: `stl/<folder name>/<path inside the folder>`.
+/// a readable entry: `stl/<folder name>/<path inside the folder>`. The
+/// battle map goes in `images/<file name>`.
 pub fn name_entries(file: &mut ProjectFile) {
+    if let Some(img) = &mut file.ground_image {
+        let name = img.path.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+        img.entry = Some(format!("images/{}", clean(name, "battle map")));
+    }
     // Folder names as shown in the library, made unique ("Tiles (2)")
     let mut taken: HashSet<String> = HashSet::new();
     let mut folder_names: HashMap<usize, String> = HashMap::new();
@@ -367,6 +388,35 @@ endsolid
         assert_eq!(inside.fingerprint(&file.embedded[0].entry), Some(Fingerprint::of(&stl)));
         let error = inside.read(&file.embedded[0].entry).expect_err("the CRC32 doesn't match");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn the_battle_map_goes_in_as_it_is() {
+        let mut file = project();
+        file.ground_image = Some(project::ImageRecord {
+            path: "../Maps/Cave: lower.png".into(),
+            absolute: None,
+            rect: [0.0, 0.0, 20.0, 10.0],
+            entry: None,
+        });
+        name_entries(&mut file);
+        let entry = file.ground_image.as_ref().and_then(|i| i.entry.clone()).expect("named");
+        assert_eq!(entry, "images/Cave_ lower.png");
+        let png = b"\x89PNG not really".repeat(50);
+        let mut out = Writer::new(Cursor::new(Vec::new()), true);
+        out.add_image(&entry, &png).expect("image");
+        let bytes = out.finish(&file, "0.5.0").expect("finish").into_inner();
+        let mut inside = Embedded::new(Cursor::new(&bytes)).expect("open");
+        assert_eq!(inside.is_compressed(&entry), Some(false));
+        assert_eq!(inside.read(&entry).expect("image"), png);
+        let read = read_container(Cursor::new(&bytes)).expect("read");
+        assert_eq!(read.ground_image, file.ground_image);
+
+        // Listed but not inside: the record stays, without its entry
+        let only_json = Writer::new(Cursor::new(Vec::new()), true).finish(&file, "0.5.0").expect("finish");
+        let read = read_container(Cursor::new(only_json.into_inner())).expect("read");
+        assert_eq!(read.ground_image.as_ref().map(|i| i.entry.clone()), Some(None));
+        assert!(read.warnings.iter().any(|w| w.contains("battle map")), "{:?}", read.warnings);
     }
 
     #[test]

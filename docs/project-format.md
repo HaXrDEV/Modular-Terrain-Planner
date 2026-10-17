@@ -1,8 +1,8 @@
 # The `.mtp` project format
 
-A project is a ZIP container holding the project as JSON and a copy of
-every STL file its tiles use, so it opens complete on any computer. The app
-writes version 6 and reads every version since 1.
+A project is a ZIP container holding the project as JSON, a copy of every
+STL file its tiles use and its battle map, so it opens complete on any
+computer. The app writes version 6 and reads every version since 1.
 
 ## Version 6
 
@@ -10,6 +10,7 @@ writes version 6 and reads every version since 1.
 | :--- | :--- |
 | `project.json` | The project, below. |
 | `stl/<folder>/<file>` | One copy of each STL file the tiles use, compressed. `<folder>` is the name of the tile folder it came from, `<file>` its path inside that folder. Identical files from two folders share one entry. |
+| `images/<file>` | The battle map, stored as it is. |
 
 Renaming a project to `.zip` shows its STL files under their own names.
 Each entry's size and CRC32 are checked when it's read, so a damaged copy is
@@ -45,7 +46,12 @@ chosen, are kept when saving.
   "embedded": [
     { "folder": 0, "file": "floors/floor_2x2.stl", "entry": "stl/OpenForge/floors/floor_2x2.stl" }
   ],
-  "ground_image": { "path": "maps/cave.png", "absolute": "C:/Maps/cave.png", "rect": [0, 0, 80, 60] }
+  "ground_image": {
+    "path": "maps/cave.png",
+    "absolute": "C:/Maps/cave.png",
+    "rect": [0, 0, 80, 60],
+    "entry": "images/cave.png"
+  }
 }
 ```
 
@@ -62,7 +68,7 @@ chosen, are kept when saving.
 | `level` | The floor of a multi-storey layout. Left out when 0. |
 | `size` | Footprint and height in cells, as last read from the STL. Lets a tile whose STL is missing keep its place and size. |
 | `embedded` | The STL files inside the container: the folder and file a tile names, and the entry holding it. Records for identical files share an entry. |
-| `ground_image` | The battle map: `rect` is `[x, y, width, depth]` in cells. The image itself isn't inside the project. |
+| `ground_image` | The battle map: `rect` is `[x, y, width, depth]` in cells, and `entry` is its copy inside the container. Like a tile's STL file, the image on disk is used when it's there. |
 
 When opening, each folder is looked for relative to the project first, then
 at `absolute`. If neither exists and the project doesn't carry its tiles'

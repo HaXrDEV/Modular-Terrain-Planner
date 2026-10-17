@@ -58,12 +58,15 @@ impl Archives {
     }
 }
 
-/// The open project's embedded STL files, by the tile key each stands in for.
+/// The open project's embedded STL files, by the tile key each stands in
+/// for, and its battle map.
 #[derive(Clone, Debug, Default)]
 pub struct EmbeddedStore {
     files: HashMap<TileKey, Stored>,
     /// Files whose copy is used even though the file is on disk.
     pinned: HashSet<TileKey>,
+    /// The battle map, by the path the document names it by.
+    image: Option<(TileKey, Stored)>,
 }
 
 impl EmbeddedStore {
@@ -73,7 +76,15 @@ impl EmbeddedStore {
             .into_iter()
             .map(|(key, entry)| (key, Stored::Archive { path: path.to_path_buf(), entry }))
             .collect();
-        Self { files, pinned: HashSet::new() }
+        Self { files, pinned: HashSet::new(), image: None }
+    }
+
+    /// Adds the battle map inside the project at `path`: its path in the
+    /// document and its entry.
+    pub fn with_image(mut self, path: &Path, image: Option<(String, String)>) -> Self {
+        self.image =
+            image.map(|(doc, entry)| (TileKey::new(&doc), Stored::Archive { path: path.to_path_buf(), entry }));
+        self
     }
 
     /// Reads every file now, for an archive that is about to be deleted.
@@ -84,7 +95,16 @@ impl EmbeddedStore {
             .iter()
             .map(|(key, stored)| Ok((key.clone(), Stored::Memory(Arc::new(archives.read(stored)?)))))
             .collect::<io::Result<_>>()?;
-        Ok(Self { files, pinned: self.pinned.clone() })
+        let image = match &self.image {
+            Some((key, stored)) => Some((key.clone(), Stored::Memory(Arc::new(archives.read(stored)?)))),
+            None => None,
+        };
+        Ok(Self { files, pinned: self.pinned.clone(), image })
+    }
+
+    /// The battle map inside the project, if the document's is that one.
+    pub fn image(&self, path: &str) -> Option<&Stored> {
+        self.image.as_ref().filter(|(key, _)| *key == TileKey::new(path)).map(|(_, stored)| stored)
     }
 
     pub fn get(&self, key: &TileKey) -> Option<&Stored> {

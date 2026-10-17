@@ -39,7 +39,7 @@
 
 - **Fast.** Thousands of tiles stay smooth, and a library opens instantly the second time.
 - **Safe.** Saves are atomic, unsaved work survives a crash, and tiles with a missing STL are kept.
-- **Portable.** A project carries its STL files and opens complete on any computer. No account, no telemetry.
+- **Portable.** A project carries its STL files and battle map, and opens complete on any computer. No account, no telemetry.
 
 The grid is 12.5 mm, so a 1" battle map square is 2 × 2 cells.
 

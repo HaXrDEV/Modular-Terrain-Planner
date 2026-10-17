@@ -9,10 +9,10 @@ still opens.
 
 ### New
 
-- Projects carry the STL files their tiles use, like a PSD carries its
-  layers, so a project opens complete on another computer. The library
-  lists them under In this project, and File > Export STL files writes
-  them out for printing.
+- Projects carry the STL files their tiles use and the battle map, like
+  a PSD carries its layers, so a project opens complete on another
+  computer. The library lists them under In this project, and File >
+  Export STL files writes them out for printing.
 - Saving runs in the background, and saving again only packs the STL
   files that changed, so it's quick. Identical files are stored once.
 - Opening a project whose STL files changed on this computer asks

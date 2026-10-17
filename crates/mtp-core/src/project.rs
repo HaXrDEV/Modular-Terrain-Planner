@@ -66,6 +66,8 @@ pub struct ImageRecord {
     pub path: String,
     pub absolute: Option<String>,
     pub rect: [f32; 4],
+    /// Its copy inside the project (format 6), `images/<name>`.
+    pub entry: Option<String>,
 }
 
 /// An STL file carried inside the project (format 6).
@@ -188,6 +190,7 @@ fn read_image(v: Option<&Value>, warnings: &mut Vec<String>) -> Option<ImageReco
     let obj = v?.as_object()?;
     let path = obj.get("path")?.as_str()?.to_owned();
     let absolute = obj.get("absolute").and_then(Value::as_str).map(str::to_owned);
+    let entry = obj.get("entry").and_then(Value::as_str).filter(|e| e.starts_with("images/")).map(str::to_owned);
     let rect: Vec<f32> = obj
         .get("rect")
         .and_then(Value::as_array)
@@ -196,9 +199,9 @@ fn read_image(v: Option<&Value>, warnings: &mut Vec<String>) -> Option<ImageReco
     if rect.len() != 4 || rect[2] <= 0.0 || rect[3] <= 0.0 {
         // A zero size tells the app to fit the image to the grid again
         warnings.push(format!("The battle map {path} had no usable size; it is placed to fill the grid."));
-        return Some(ImageRecord { path, absolute, rect: [0.0; 4] });
+        return Some(ImageRecord { path, absolute, rect: [0.0; 4], entry });
     }
-    Some(ImageRecord { path, absolute, rect: [rect[0], rect[1], rect[2], rect[3]] })
+    Some(ImageRecord { path, absolute, rect: [rect[0], rect[1], rect[2], rect[3]], entry })
 }
 
 /// The Python app's files, with its migrations: v1 had no grid size (40 × 40),
@@ -402,6 +405,9 @@ pub fn write(file: &ProjectFile, app_version: &str) -> String {
         if let Some(abs) = &img.absolute {
             o["absolute"] = json!(abs);
         }
+        if let Some(entry) = &img.entry {
+            o["entry"] = json!(entry);
+        }
         root["ground_image"] = o;
     }
     if !file.embedded.is_empty() {
@@ -585,6 +591,7 @@ pub fn from_state(state: &DocState, open: &[LibraryFolder], project_dir: &str) -
             path: saved_path(&img.path),
             absolute: Some(TileKey::new(&img.path).as_str().to_owned()),
             rect: img.rect,
+            entry: None,
         }),
         embedded: Vec::new(),
         warnings: Vec::new(),
@@ -626,7 +633,12 @@ mod tests {
                 level: 2,
                 size: Some(TileSize { w: 2, h: 1, gz: 4.064 }),
             }],
-            ground_image: Some(ImageRecord { path: "cave.png".into(), absolute: None, rect: [0.0, 0.0, 60.0, 40.0] }),
+            ground_image: Some(ImageRecord {
+                path: "cave.png".into(),
+                absolute: None,
+                rect: [0.0, 0.0, 60.0, 40.0],
+                entry: Some("images/cave.png".into()),
+            }),
             embedded: vec![EmbeddedRecord {
                 folder: 0,
                 file: "walls/wall.stl".into(),

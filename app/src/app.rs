@@ -456,7 +456,9 @@ impl App {
         self.discard_own_autosave();
         // From now on the copies inside are read from the new file
         let keys = saved.embedded.iter().map(|(k, _)| k.clone()).collect();
-        self.embedded = EmbeddedStore::in_archive(&path, saved.embedded).with_pins_of(&self.embedded);
+        self.embedded = EmbeddedStore::in_archive(&path, saved.embedded)
+            .with_image(&path, saved.image)
+            .with_pins_of(&self.embedded);
         self.library.set_embedded(keys);
         let note = match saved.missing.len() {
             0 => String::new(),
@@ -578,7 +580,7 @@ impl App {
             self.renderer.set_ground_image(None);
             return;
         };
-        match files::decode_image(Path::new(&img.path), self.renderer.max_texture_side()) {
+        match files::load_image(&img.path, &self.embedded, self.renderer.max_texture_side()) {
             Ok(d) => {
                 self.renderer.set_ground_image(Some((d.width, d.height, &d.rgba)));
                 if img.rect[2] <= 0.0 || img.rect[3] <= 0.0 {

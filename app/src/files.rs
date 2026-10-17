@@ -50,12 +50,17 @@ pub fn read_project(path: &Path) -> Result<PendingOpen, String> {
 
 /// The document for a project whose folders have been looked for.
 pub fn finish_open(pending: &PendingOpen) -> DocState {
+    project::to_state(&pending.file, &pending.project_dir(), &pending.found, image_path(pending))
+}
+
+/// The battle map's path in the opened document: the file on disk when it's
+/// there (next to the project first), else where it was when saved.
+fn image_path(pending: &PendingOpen) -> Option<String> {
     let dir = pending.project_dir();
-    let image = pending.file.ground_image.as_ref().and_then(|img| {
-        let candidates = [Some(project::join(&dir, &img.path)), img.absolute.clone()];
-        candidates.into_iter().flatten().find(|p| Path::new(p).is_file())
-    });
-    project::to_state(&pending.file, &dir, &pending.found, image)
+    let img = pending.file.ground_image.as_ref()?;
+    let saved = img.absolute.clone().unwrap_or_else(|| project::join(&dir, &img.path));
+    let candidates = [project::join(&dir, &img.path), saved.clone()];
+    Some(candidates.into_iter().find(|p| Path::new(p).is_file()).unwrap_or(saved))
 }
 
 /// Folders a document needs, in the order to load them. Folders that
@@ -81,11 +86,13 @@ fn carried(pending: &PendingOpen, i: usize) -> bool {
     tiles.peek().is_some() && tiles.all(|t| pending.file.embedded.iter().any(|e| e.folder == i && e.file == t.file))
 }
 
-/// The STL files inside an opened project, by the tile key each stands in
-/// for, read from the project file when needed.
+/// The STL files and battle map inside an opened project, by the tile key
+/// or image path each stands in for, read from the project file when needed.
 pub fn embedded_store(pending: &PendingOpen) -> EmbeddedStore {
     let entries = project::embedded_keys(&pending.file, &pending.project_dir(), &pending.found);
+    let image = pending.file.ground_image.as_ref().and_then(|img| img.entry.clone());
     EmbeddedStore::in_archive(&pending.path, entries.into_iter().map(|(key, e)| (key, e.entry.clone())))
+        .with_image(&pending.path, image_path(pending).zip(image))
 }
 
 /// Folders that weren't found and hold tiles whose STL file isn't inside
@@ -126,6 +133,8 @@ pub struct Saved {
     /// STL files that are neither on this computer nor inside the project
     /// being replaced, so their tiles are saved without them.
     pub missing: Vec<TileKey>,
+    /// The battle map's path in the document and its entry, if it's inside.
+    pub image: Option<(String, String)>,
 }
 
 /// What a save writes, worked out on the UI thread so that the writing can
@@ -135,6 +144,8 @@ pub struct SavePlan {
     file: ProjectFile,
     /// One per record of `file.embedded`.
     sources: Vec<Source>,
+    /// The battle map, when it goes inside.
+    image: Option<Source>,
     saved: Saved,
 }
 
@@ -188,7 +199,20 @@ pub fn plan_save(state: &DocState, library: &Library, store: &EmbeddedStore, pat
         }
     }
     file.embedded = kept;
-    SavePlan { file, sources, saved }
+    // The battle map goes inside too, when it's on disk or inside already
+    let image_path = state.ground_image.as_ref().map(|img| img.path.as_str());
+    let image = match (image_path, &mut file.ground_image) {
+        (Some(path), Some(record)) if Path::new(path).is_file() || store.image(path).is_some() => {
+            saved.image = record.entry.clone().map(|entry| (path.to_owned(), entry));
+            Some(Source { key: TileKey::new(path), stored: store.image(path).cloned(), pinned: false })
+        }
+        (_, Some(record)) => {
+            record.entry = None;
+            None
+        }
+        _ => None,
+    };
+    SavePlan { file, sources, image, saved }
 }
 
 /// Writes a planned save atomically, keeping the previous file as `.bak`
@@ -203,7 +227,7 @@ pub fn write_save(
     compress: bool,
     progress: &dyn Fn(usize),
 ) -> Result<Saved, String> {
-    let SavePlan { mut file, sources, mut saved } = plan;
+    let SavePlan { mut file, sources, image, mut saved } = plan;
     write_atomic_with(path, keep_backup, |f| {
         let mut archives = Archives::default();
         let mut out = container::Writer::new(BufWriter::new(f), compress);
@@ -242,6 +266,14 @@ pub fn write_save(
                 written.entry(fingerprint).or_default().push((i, copied));
             }
             progress(i + 1);
+        }
+        if let (Some(source), Some(entry)) = (&image, file.ground_image.as_ref().and_then(|i| i.entry.as_ref())) {
+            let fail = |e: io::Error| io::Error::other(format!("{}: {e}", source.key.as_str()));
+            match source.contents(&mut archives).map_err(fail)? {
+                Contents::Copy { archive, inside, .. } => out.copy(archives.open(&archive)?, &inside, entry),
+                Contents::Bytes(bytes) => out.add_image(entry, &bytes),
+            }
+            .map_err(fail)?;
         }
         let out = out.finish(&file, VERSION)?;
         // Closed before the new file takes the place of the one they read
@@ -459,6 +491,22 @@ pub fn decode_image(path: &Path, max_side: u32) -> Result<DecodedImage, String> 
         .map_err(|e| format!("{} can't be read: {e}", path.display()))?
         .decode()
         .map_err(|e| format!("{} isn't an image this app can read: {e}", path.display()))?;
+    Ok(scaled(img, max_side, path))
+}
+
+/// The battle map at `path`: the file on disk when it's there, else its
+/// copy inside the project.
+pub fn load_image(path: &str, store: &EmbeddedStore, max_side: u32) -> Result<DecodedImage, String> {
+    let on_disk = Path::new(path);
+    let Some(stored) = store.image(path).filter(|_| !on_disk.is_file()) else { return decode_image(on_disk, max_side) };
+    let bytes = stored.read().map_err(|e| format!("The copy of {path} inside the project can't be read: {e}"))?;
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("The copy of {path} inside the project isn't an image this app can read: {e}"))?;
+    Ok(scaled(img, max_side, on_disk))
+}
+
+/// An image scaled down to fit `max_side`, as RGBA.
+fn scaled(img: image::DynamicImage, max_side: u32, path: &Path) -> DecodedImage {
     let img = if img.width() > max_side || img.height() > max_side {
         tracing::info!("scaling {} down to {max_side} px", path.display());
         img.resize(max_side, max_side, image::imageops::FilterType::Triangle)
@@ -466,7 +514,7 @@ pub fn decode_image(path: &Path, max_side: u32) -> Result<DecodedImage, String> 
         img
     };
     let rgba = img.to_rgba8();
-    Ok(DecodedImage { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+    DecodedImage { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() }
 }
 
 /// Where a new battle map goes: filling the grid, keeping its proportions.
@@ -654,6 +702,40 @@ mod tests {
         save_project(&doc, &library, &EmbeddedStore::default(), &path).expect("save");
         let store = embedded_store(&read_project(&path).expect("reopen"));
         assert_eq!(store.get(&key).expect("inside").read().expect("read"), std::fs::read(WALL).expect("fixture"));
+    }
+
+    #[test]
+    fn the_battle_map_travels_with_the_project() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let maps = dir.path().join("Maps");
+        std::fs::create_dir(&maps).expect("folder");
+        let png = maps.join("cave.png");
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([200, 100, 50, 255])).save(&png).expect("png");
+        let original = std::fs::read(&png).expect("read");
+        let mut state = DocState::empty(GridSize { cols: 20, rows: 20 });
+        state.ground_image = Some(ground_image(&png, [0.0, 0.0, 20.0, 10.0]));
+        let library = Library::new(None, 0, Arc::new(|| {}));
+        let path = dir.path().join("castle.mtp");
+        let saved = save_project(&Document::new(state), &library, &EmbeddedStore::default(), &path).expect("save");
+        assert_eq!(saved.image.as_ref().map(|(_, e)| e.as_str()), Some("images/cave.png"));
+        let mut inside = Embedded::open(&path).expect("open");
+        assert_eq!(inside.is_compressed("images/cave.png"), Some(false), "stored as it is");
+        assert_eq!(inside.read("images/cave.png").expect("image"), original);
+
+        // On another computer the copy is shown, and saving keeps it
+        std::fs::remove_dir_all(&maps).expect("remove");
+        let pending = read_project(&path).expect("reopen");
+        let state = finish_open(&pending);
+        let shown = state.ground_image.clone().expect("kept");
+        let store = embedded_store(&pending);
+        let decoded = load_image(&shown.path, &store, 4096).expect("from the project");
+        assert_eq!((decoded.width, decoded.height), (4, 2));
+        assert_eq!(&decoded.rgba[..4], &[200, 100, 50, 255]);
+        assert!(load_image(&shown.path, &EmbeddedStore::default(), 4096).is_err(), "not on disk");
+        let again = save_project(&Document::new(state), &library, &store, &path).expect("save again");
+        assert_eq!(again.image, Some((shown.path.clone(), "images/cave.png".into())));
+        let store = embedded_store(&read_project(&path).expect("reopen"));
+        assert_eq!(store.image(&shown.path).expect("inside").read().expect("read"), original);
     }
 
     #[test]
