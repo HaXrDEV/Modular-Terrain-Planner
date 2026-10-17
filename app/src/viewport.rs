@@ -33,6 +33,11 @@ enum Drag {
     BoxSelect {
         start: Pos2,
     },
+    /// Shift+drag with the Place tool: a rectangle filled with the tile,
+    /// from the corner where the drag started.
+    Fill {
+        start: (f32, f32),
+    },
     /// Placing tiles along the drag; remembers the last origin used.
     Paint {
         last: Option<(i32, i32)>,
@@ -294,7 +299,30 @@ impl Viewport {
                             (check(Mode::Free).map_or(0.0, |z| z[0]), DrawKind::RefusedGhost)
                         }
                     };
-                    ghosts.push(draw_tile(&proposal, z, color_for(library, &key), kind));
+                    let color = color_for(library, &key);
+                    let base = Proposal { x: 0.0, y: 0.0, ..proposal.clone() };
+                    let filling = matches!(self.drag, Drag::Fill { .. });
+                    if let Drag::Fill { start } = self.drag {
+                        let proposals = fill_proposals(&base, start, (x, y), (w as f32, d as f32));
+                        for (p, z) in editor.fit(&proposals, mode) {
+                            let kind = if z.is_some() { DrawKind::Ghost } else { DrawKind::RefusedGhost };
+                            ghosts.push(draw_tile(&p, z.unwrap_or(0.0), color, kind));
+                        }
+                        if response.drag_stopped() {
+                            editor.fill(proposals, mode);
+                            self.drag = Drag::None;
+                        }
+                        ui.ctx().request_repaint();
+                    } else if modifiers.shift && primary_drag_start {
+                        self.drag = Drag::Fill { start: (x, y) };
+                    } else if modifiers.shift && primary_click {
+                        let from = editor.last_placed.unwrap_or((x, y));
+                        let proposals = line_proposals(&base, from, (x, y), (w as f32, d as f32));
+                        editor.fill(proposals, mode);
+                    }
+                    if !filling {
+                        ghosts.push(draw_tile(&proposal, z, color, kind));
+                    }
                     let origin = (x.floor() as i32, y.floor() as i32);
                     // Painting over tiles of the same kind leaves them alone
                     // instead of stacking copies; a click still stacks
@@ -304,7 +332,9 @@ impl Viewport {
                         .iter()
                         .any(|t| t.key == key && t.rotation == rotation && t.x == x && t.y == y);
                     let paint = matches!(self.drag, Drag::Paint { last } if last != Some(origin)) && !same_there;
-                    if (primary_click || paint || primary_drag_start) && kind == DrawKind::Ghost {
+                    if modifiers.shift || filling {
+                        // Fills and lines were handled above
+                    } else if (primary_click || paint || primary_drag_start) && kind == DrawKind::Ghost {
                         editor.place(vec![proposal], mode);
                         self.drag = Drag::Paint { last: Some(origin) };
                     } else if primary_drag_start {
@@ -577,4 +607,90 @@ impl Viewport {
 
 fn wgpu_nearest() -> eframe::wgpu::FilterMode {
     eframe::wgpu::FilterMode::Nearest
+}
+
+/// The tiles of a rectangle fill, stepping by the footprint from the corner
+/// where the drag started (at most 4,000).
+fn fill_proposals(base: &Proposal, start: (f32, f32), end: (f32, f32), step: (f32, f32)) -> Vec<Proposal> {
+    let count = |a: f32, b: f32, s: f32| ((b - a).abs() / s).floor() as i32 + 1;
+    let (nx, ny) = (count(start.0, end.0, step.0), count(start.1, end.1, step.1));
+    let (sx, sy) = (if end.0 < start.0 { -step.0 } else { step.0 }, if end.1 < start.1 { -step.1 } else { step.1 });
+    let mut out = Vec::new();
+    for j in 0..ny.min(200) {
+        for i in 0..nx.min(200) {
+            if out.len() >= 4000 {
+                return out;
+            }
+            out.push(Proposal { x: start.0 + sx * i as f32, y: start.1 + sy * j as f32, ..base.clone() });
+        }
+    }
+    out
+}
+
+/// The tiles of a straight line from the last placed tile (left out) to
+/// `end`, along whichever axis is longer.
+fn line_proposals(base: &Proposal, from: (f32, f32), end: (f32, f32), step: (f32, f32)) -> Vec<Proposal> {
+    let (dx, dy) = (end.0 - from.0, end.1 - from.1);
+    let horizontal = dx.abs() >= dy.abs();
+    let (len, s) = if horizontal { (dx, step.0) } else { (dy, step.1) };
+    let n = ((len.abs() / s).floor() as i32).min(400);
+    let dir = len.signum();
+    (1..=n)
+        .map(|i| {
+            let k = dir * s * i as f32;
+            if horizontal {
+                Proposal { x: from.0 + k, y: from.1, ..base.clone() }
+            } else {
+                Proposal { x: from.0, y: from.1 + k, ..base.clone() }
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mtp_core::footprint::Rotation;
+    use mtp_core::units::TileSize;
+
+    fn base() -> Proposal {
+        Proposal {
+            key: TileKey::new("t.stl"),
+            size: TileSize { w: 2, h: 2, gz: 0.5 },
+            size_known: true,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            rotation: Rotation::ZERO,
+            level: 0,
+        }
+    }
+
+    #[test]
+    fn fills_tile_the_rectangle_in_any_direction() {
+        let p = fill_proposals(&base(), (10.0, 10.0), (5.0, 14.0), (2.0, 2.0));
+        let xy: Vec<(f32, f32)> = p.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(
+            xy,
+            [
+                (10.0, 10.0),
+                (8.0, 10.0),
+                (6.0, 10.0),
+                (10.0, 12.0),
+                (8.0, 12.0),
+                (6.0, 12.0),
+                (10.0, 14.0),
+                (8.0, 14.0),
+                (6.0, 14.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn lines_follow_the_longer_axis() {
+        let p = line_proposals(&base(), (0.0, 0.0), (7.0, 1.0), (2.0, 2.0));
+        let xy: Vec<(f32, f32)> = p.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(xy, [(2.0, 0.0), (4.0, 0.0), (6.0, 0.0)]);
+        assert!(line_proposals(&base(), (3.0, 3.0), (3.0, 3.0), (2.0, 2.0)).is_empty());
+    }
 }

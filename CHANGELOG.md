@@ -12,9 +12,10 @@ saving writes format version 5, which earlier versions can't open.
 - A tile library that stays open through New and Open, with pictures,
   search, footprint filters, subfolders and sample tiles. It loads in the
   background and opens instantly the second time.
-- Tools: Select, Place (click or drag to paint), Erase and Paste. Alt+click
-  picks up a tile, Q and E turn either way, arrows nudge. Right click opens
-  a menu.
+- Tools: Select, Place (click or drag to paint, Shift+drag to fill a
+  rectangle, Shift+click for a line), Erase and Paste. Keys 1 to 9 pick a
+  recently placed tile, Alt+click picks up a placed one, Q and E turn
+  either way and arrows nudge. Right click opens a menu.
 - A 2D top-down view (the default) and a 3D view, zooming toward the
   pointer.
 - A red, hatched ghost and a reason when a tile can't go somewhere.

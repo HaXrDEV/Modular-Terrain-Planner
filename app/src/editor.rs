@@ -9,7 +9,7 @@ use std::time::Instant;
 use mtp_core::document::{DocState, Document};
 use mtp_core::footprint::{self, Rect, Rotation, Turn};
 use mtp_core::grid::GridSize;
-use mtp_core::rules::{Mode, Proposal, Refusal};
+use mtp_core::rules::{self, Height, Mode, Proposal, Refusal};
 use mtp_core::tile::{Placed, PlacedId, TileKey};
 use mtp_core::units::TileSize;
 
@@ -110,7 +110,14 @@ pub struct Editor {
     turn_pivot: Option<(BTreeSet<PlacedId>, [f32; 2], u64)>,
     /// Increases with every change to the document, for caches.
     pub revision: u64,
+    /// Where the last tile was placed, for Shift+click lines.
+    pub last_placed: Option<(f32, f32)>,
+    /// Tiles placed recently, newest first, for keys 1 to 9.
+    pub recent: Vec<(TileKey, TileSize)>,
 }
+
+/// How many recent tiles keys 1 to 9 reach.
+pub const HOTBAR: usize = 9;
 
 impl Editor {
     pub fn new(doc: Document, path: Option<PathBuf>) -> Self {
@@ -123,6 +130,8 @@ impl Editor {
             notice: None,
             turn_pivot: None,
             revision: 0,
+            last_placed: None,
+            recent: Vec::new(),
         }
     }
 
@@ -169,11 +178,22 @@ impl Editor {
         self.doc.tiles().iter().filter(|t| self.selection.contains(&t.id)).collect()
     }
 
+    fn remember(&mut self, p: &Proposal) {
+        self.last_placed = Some((p.x, p.y));
+        self.recent.retain(|(k, _)| *k != p.key);
+        self.recent.insert(0, (p.key.clone(), p.size));
+        self.recent.truncate(HOTBAR);
+    }
+
     pub fn place(&mut self, proposals: Vec<Proposal>, mode: Mode) -> Option<Vec<PlacedId>> {
         let label = if proposals.len() == 1 { "Place tile" } else { "Place tiles" };
+        let last = proposals.last().cloned();
         match self.doc.place(label, proposals, mode) {
             Ok(ids) => {
                 self.changed();
+                if let Some(p) = last {
+                    self.remember(&p);
+                }
                 Some(ids)
             }
             Err(r) => {
@@ -181,6 +201,53 @@ impl Editor {
                 None
             }
         }
+    }
+
+    /// Which of `proposals` fit, each checked against the document and the
+    /// ones before it, with the height each would get. For fills and
+    /// lines, which skip what doesn't fit instead of refusing everything.
+    pub fn fit(&self, proposals: &[Proposal], mode: Mode) -> Vec<(Proposal, Option<f32>)> {
+        let grid = self.doc.grid();
+        let mut accepted: Vec<Placed> = self.doc.tiles().to_vec();
+        let none = std::collections::HashSet::new();
+        proposals
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let z = rules::arrange(grid, &accepted, &none, std::slice::from_ref(p), mode, Height::Settle)
+                    .ok()
+                    .map(|z| z[0]);
+                if let Some(z) = z {
+                    accepted.push(p.clone().into_placed(PlacedId(u64::MAX - i as u64), z));
+                }
+                (p.clone(), z)
+            })
+            .collect()
+    }
+
+    /// Places every proposal that fits, as one undo step. Returns how many
+    /// were placed and how many skipped.
+    pub fn fill(&mut self, proposals: Vec<Proposal>, mode: Mode) -> (usize, usize) {
+        let fitted = self.fit(&proposals, mode);
+        let total = fitted.len();
+        let ok: Vec<Proposal> = fitted.into_iter().filter_map(|(p, z)| z.map(|_| p)).collect();
+        let placed = ok.len();
+        if placed > 0 {
+            let last = ok.last().cloned();
+            if self.doc.place(if placed == 1 { "Place tile" } else { "Fill" }, ok, mode).is_ok() {
+                self.changed();
+                if let Some(p) = last {
+                    self.remember(&p);
+                }
+            }
+        }
+        let skipped = total - placed;
+        if skipped > 0 {
+            self.tell(format!("Placed {placed} tiles; {skipped} didn't fit and were skipped."));
+        } else if placed > 1 {
+            self.tell(format!("Placed {placed} tiles."));
+        }
+        (placed, skipped)
     }
 
     pub fn delete(&mut self, ids: &[PlacedId]) {
@@ -354,6 +421,30 @@ mod tests {
         e.select_all();
         e.undo();
         assert!(e.selection.is_empty(), "the undone tile can't stay selected");
+    }
+
+    #[test]
+    fn fills_skip_what_does_not_fit() {
+        let mut e = editor_with(1); // a 2x1 floor at (4, 4)
+        let row: Vec<Proposal> = (0..4)
+            .map(|i| Proposal {
+                key: TileKey::new("C:/t/floor.stl"),
+                size: TileSize { w: 2, h: 1, gz: 0.5 },
+                size_known: true,
+                x: 2.0 + 2.0 * i as f32,
+                y: 4.0,
+                z: 0.0,
+                rotation: Rotation::ZERO,
+                level: 0,
+            })
+            .collect();
+        // (4, 4) is taken at ground level but a stacked copy fits there
+        let (placed, skipped) = e.fill(row, Mode::Snap);
+        assert_eq!((placed, skipped), (4, 0));
+        assert_eq!(e.doc.tiles().len(), 5);
+        e.undo();
+        assert_eq!(e.doc.tiles().len(), 1, "a fill is one undo step");
+        assert_eq!(e.recent.len(), 1);
     }
 
     #[test]

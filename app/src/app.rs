@@ -562,6 +562,20 @@ impl App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Y)) {
             self.editor.redo();
         }
+        // 1 to 9 pick a recently used tile
+        let digits =
+            [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+        for (i, k) in digits.into_iter().enumerate() {
+            if ctx.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, k))
+                && let Some((key, size)) = self.editor.recent.get(i).cloned()
+            {
+                let rotation = match &self.editor.tool {
+                    Tool::Place { rotation, .. } => *rotation,
+                    _ => Default::default(),
+                };
+                self.editor.tool = Tool::Place { key, size, rotation };
+            }
+        }
     }
 
     // ---- Background work --------------------------------------------------
@@ -862,7 +876,9 @@ impl App {
             let tool = self.editor.tool.name();
             let hint = match &self.editor.tool {
                 Tool::Select => "Click to select · drag to move · Shift adds · Alt+click picks up a tile",
-                Tool::Place { .. } => "Click or drag to place · Q/E turn · Ctrl places freely · Esc stops",
+                Tool::Place { .. } => {
+                    "Click or drag to place · Shift+drag fills · Shift+click draws a line · Q/E turn · Ctrl places freely · Esc stops"
+                }
                 Tool::Erase => "Click or drag over tiles to remove them · Esc stops",
                 Tool::Paste => "Click to paste · Q/E turn · Esc stops",
             };

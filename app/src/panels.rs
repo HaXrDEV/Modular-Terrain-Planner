@@ -83,6 +83,26 @@ impl LibraryPanel {
                 }
             });
         }
+        if !editor.recent.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Recent").weak()).on_hover_text("Keys 1 to 9 pick these");
+                for (i, (key, size)) in editor.recent.clone().into_iter().enumerate() {
+                    let on = matches!(&editor.tool, Tool::Place { key: k, .. } if *k == key);
+                    let thumb = library.tile(&key).and_then(|t| t.thumbnail);
+                    let label = format!("{}", i + 1);
+                    let resp = match thumb {
+                        Some(tex) => ui.add(
+                            egui::Button::image_and_text(egui::Image::new((tex, egui::vec2(24.0, 24.0))), label)
+                                .selected(on),
+                        ),
+                        None => ui.add(egui::Button::new(label).selected(on)),
+                    };
+                    if resp.on_hover_text(key.stem()).clicked() {
+                        editor.tool = Tool::Place { key, size, rotation: Default::default() };
+                    }
+                }
+            });
+        }
         ui.separator();
 
         if library.folders().is_empty() {

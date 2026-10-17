@@ -70,6 +70,8 @@ Add a folder of STL files with **File > Add tile folder** (or drop it onto the w
 | To | Do this |
 | :--- | :--- |
 | Place, select, erase | Click a tile in the library, press **V** for Select, **X** for Erase |
+| Fill a room, draw a wall | **Shift**+drag fills a rectangle, **Shift**+click draws a line from the last tile |
+| Switch tiles quickly | **1** to **9** pick a recently placed tile |
 | Turn | **Q** and **E** |
 | Move the selection | Drag it, or use the arrow keys |
 | Place freely, off the grid | Hold **Ctrl** |

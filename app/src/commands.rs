@@ -122,6 +122,9 @@ pub fn spec(command: Command) -> &'static Spec {
 pub const MOUSE: &[(&str, &str)] = &[
     ("Left click", "Use the tool: select, place or erase"),
     ("Left drag", "Move the selection, box-select, or paint tiles"),
+    ("Shift + drag (placing)", "Fill a rectangle with the tile"),
+    ("Shift + click (placing)", "Place a line of tiles from the last one"),
+    ("1 to 9", "Pick one of the recently placed tiles"),
     ("Shift + click", "Add to or remove from the selection"),
     ("Ctrl + click or drag", "Place or move freely, off the grid (only the grid edge is checked)"),
     ("Alt + click", "Pick up a tile: choose it and its turn for placing"),
