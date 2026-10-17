@@ -1,168 +1,106 @@
-![Banner](docs/banner.svg)
+<p align="center">
+  <img src="docs/banner-light.svg#gh-light-mode-only" alt="Modular Terrain Planner" width="100%">
+  <img src="docs/banner-dark.svg#gh-dark-mode-only" alt="Modular Terrain Planner" width="100%">
+</p>
 
-A desktop tool for designing tabletop RPG dungeon layouts by placing modular terrain STL tiles on a grid — like digital Lego. When you're done, export a build plan PDF with a visual assembly map and print list so you know exactly what to print and where it goes.
+<p align="center">
+  Lay out a dungeon from your modular terrain STL files,<br>
+  then print exactly the tiles it needs and build it from the plan.
+</p>
 
-![Python](https://img.shields.io/badge/python-3.11%2B-blue) ![PySide6](https://img.shields.io/badge/PySide6-6.11%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-4.6%20Core-orange)
+<p align="center">
+  <a href="https://github.com/HaXrDEV/modular-terrain-planner/releases/latest"><img src="https://img.shields.io/github/v/release/HaXrDEV/modular-terrain-planner?include_prereleases&style=flat-square&label=version&color=c87020" alt="Version"></a>
+  <a href="https://github.com/HaXrDEV/modular-terrain-planner/actions/workflows/checks.yml"><img src="https://img.shields.io/github/actions/workflow/status/HaXrDEV/modular-terrain-planner/checks.yml?branch=main&style=flat-square&label=checks" alt="Checks"></a>
+  <img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555?style=flat-square" alt="Windows, macOS and Linux">
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-1.95%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.95 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="MIT license"></a>
+</p>
 
-![Screenshot](docs/screenshot.png)
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#using-it">Using it</a> ·
+  <a href="#files-and-privacy">Files and privacy</a> ·
+  <a href="#development">Development</a>
+</p>
 
----
+<p align="center">
+  <img src="docs/screenshot-light.png#gh-light-mode-only" alt="A dungeon of stone floors and brick walls in Modular Terrain Planner" width="900">
+  <img src="docs/screenshot-dark.png#gh-dark-mode-only" alt="A dungeon of stone floors and brick walls in Modular Terrain Planner" width="900">
+</p>
 
 ## Features
 
-- **3D grid layout** — Place modular STL tiles on a snap-to-grid canvas with a live ghost preview and orbit/top-down camera
-- **Automatic tile sizing** — Bounding boxes are read directly from each STL file and mapped to grid cells (1 cell = 25 mm); inch-unit files (e.g. OpenForge) are detected and converted automatically
-- **Select, move & copy** — Click, rubber-band, or Shift-click to select tiles; drag to reposition, Ctrl+C/V to duplicate
-- **Battle map overlay** — Drop any image onto the ground plane and align it to the grid
-- **Build plan export** — Export a PDF with a labeled top-down assembly map and a print list showing tile names, paths, and quantities
-- **Assembly map** — Export a standalone labeled 2D top-down PNG map showing every tile's position, rotation, and stacking order
-- **CSV print list** — Export a simple tile-count CSV for quick reference
+| Part | What it does |
+| :--- | :--- |
+| **Library** | Opens folders of STL files (OpenForge, Dragonlock and the like), with pictures, search and footprint filters. Each tile's size in grid cells comes from the file, inches included. |
+| **Layout** | Place, paint, move, turn, copy and stack tiles on a grid in 2D or 3D. Tiles stack only on a level surface, and a red ghost says why a spot won't work. |
+| **Battle map** | Lays an image under the grid to build on. |
+| **Build plan** | A PDF with a numbered map that shows which way each tile faces, a print list per STL file and a table of every placement. Also a PNG map and a CSV print list. |
 
----
+- **Fast.** Thousands of tiles stay smooth, far-away tiles are drawn with less detail, and a library opens instantly the second time.
+- **Nothing is lost.** Tiles whose STL is missing are kept and saved as they are, saves never leave a half-written file, and unsaved work is recovered after a crash.
+- **Projects travel.** Paths are saved relative to the project, so a project and its tiles can move together, also between Windows, macOS and Linux.
 
-## Getting Started
+1 grid cell is 12.5 mm, so a 1" battle-map square is 2 × 2 cells.
 
-### Portable binary (easiest)
+## Install
 
-Download the binary for your platform from the [latest release](../../releases/latest) — no Python or dependencies required.
+Download the file for your system from the [latest release](https://github.com/HaXrDEV/modular-terrain-planner/releases/latest):
 
-| Platform | File                              |
-|----------|-----------------------------------|
-| Windows  | `DungeonDesigner-<version>.exe`   |
-| macOS    | `DungeonDesigner-<version>-mac`   |
-| Linux    | `DungeonDesigner-<version>-linux` |
+| System | File |
+| :--- | :--- |
+| Windows 10 or 11 | `…-windows-x64-setup.exe` installs it for you (no administrator rights), or unzip `…-windows-x64.zip` anywhere |
+| macOS 11 or newer | Unzip `…-macos-universal.zip` and move the app to Applications |
+| Linux (glibc 2.35 or newer) | `chmod +x` the `…-linux-x86_64.AppImage` and run it, or unpack `…-linux-x64.tar.gz` and run `./install.sh` |
 
-**Windows:** SmartScreen may warn on first run — click *More info → Run anyway*.
+The downloads aren't code-signed, so the first start asks once:
 
-**macOS / Linux:** Make the binary executable before running: `chmod +x DungeonDesigner-*`. On macOS, Gatekeeper may block the unsigned binary — right-click → *Open* to bypass.
+- **Windows:** SmartScreen protected your PC. Choose *More info*, then *Run anyway*.
+- **macOS:** Apple can't check the app. Open *System Settings > Privacy & Security* and choose *Open Anyway*.
 
-### From source
+The app draws with Vulkan, DirectX 12, Metal or OpenGL 3.3, so most graphics cards from the last ten years work. If the view stays blank, update the graphics driver, or pick *OpenGL* under *View > Settings > Graphics*.
 
-Requires Python 3.11+ and the following dependencies (installed automatically by `launch.bat`):
+Projects from the Python version (0.4 and earlier) open as they are. That version is tagged [`python-final`](https://github.com/HaXrDEV/modular-terrain-planner/tree/python-final).
 
-```text
-PySide6 >= 6.11, < 7
-PySide6-Addons >= 6.11, < 7
-numpy-stl >= 3.0, < 4
-numpy >= 1.24, < 3
-PyOpenGL >= 3.1, < 4
-```
+## Using it
 
-**Windows** — double-click **`launch.bat`**. It will:
+Add a folder of STL files with **File > Add tile folder** (or drop it onto the window), or try the sample tiles. Click a tile in the library, then click or drag on the grid to place it.
 
-1. Create a `.venv` virtual environment if one doesn't exist
-2. Install all dependencies into it
-3. Launch the application
+| To | Do this |
+| :--- | :--- |
+| Place, select, erase | Click a tile in the library, press **V** for Select, **X** for Erase |
+| Turn | **Q** and **E** |
+| Move the selection | Drag it, or use the arrow keys |
+| Place freely, off the grid | Hold **Ctrl** |
+| Pick up a placed tile | **Alt**+click it |
+| Look around | Right drag to orbit, middle drag to pan, wheel to zoom, **T** for 2D or 3D |
+| Export the build plan | **Ctrl+E** |
 
-**Linux / macOS** — run **`launch.sh`** from a terminal:
+**Help > Keyboard and mouse** lists everything else.
+
+## Files and privacy
+
+The app never uses the network. Projects are `.mtp` files (JSON) wherever you save them. Settings, logs, autosaves and the mesh cache stay in the app's own folders, which *Help > About* shows:
+
+- Windows: `%APPDATA%` and `%LOCALAPPDATA%\Modular Terrain Planner`
+- macOS: `~/Library/Application Support` and `~/Library/Caches`
+- Linux: `~/.config`, `~/.local/share` and `~/.cache`
+
+## Development
+
+Install [Rust](https://rustup.rs), then:
 
 ```bash
-chmod +x launch.sh   # first run only
-./launch.sh
+cargo run
 ```
-
-It does the same three steps as the Windows launcher.
-
-### Manual
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # Linux/macOS
-pip install -r requirements.txt
-python main.py
+cargo test --workspace
 ```
 
----
-
-## Usage
-
-1. **Load STL folder** — Click *Load STL Folder* in the palette panel and select a directory containing `.stl` files. Each folder opens as a new tab. Load as many folders as you like and switch between them instantly.
-2. **Select a tile** — Click a tile in the list. A 3D preview appears below the list; left-drag the preview to orbit it, scroll to zoom.
-3. **Place tiles** — Move your mouse over the grid and left-click to place. The ghost preview shows where the tile will land.
-4. **Rotate** — Press **R** to rotate the pending tile 90° clockwise. The palette preview updates to match.
-5. **Remove** — Right-click a placed tile to remove it.
-6. **Select & move placed tiles** — Press **Esc** to deselect any palette tile, then:
-   - **Left-click** a tile to select it (highlighted in blue); click elsewhere to deselect.
-   - **Shift + left-click** to add or remove tiles from the selection.
-   - **Left-drag over empty space** to draw a rubber-band box and select all tiles inside it.
-   - **Left-drag a selected tile** to move the entire selection (snaps to grid; hold **Ctrl** for free placement).
-   - **R** while dragging rotates the group around its centroid.
-   - **Esc** clears the selection.
-7. **Copy & paste** — With tiles selected:
-   - **Ctrl+C** copies the selection.
-   - **Ctrl+V** enters paste ghost mode — semi-transparent ghost tiles follow the cursor. Left-click to place a copy (paste mode stays active for repeated placements). **Esc** exits paste mode.
-8. **Navigate the main camera**:
-   - **Right-drag** — Orbit (azimuth / elevation)
-   - **Middle-drag** — Pan
-   - **Scroll wheel** — Zoom in / out
-   - **Home** — Reset camera to default position
-   - **5** — Toggle top-down orthographic mode (perspective-less overhead view; right-drag and WASD pan, scroll zooms)
-9. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
-10. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
-11. **Export build plan** — Click *Export Build Plan* in the palette panel or go to *File → Export Build Plan (PDF)…* (Ctrl+E) to export a PDF with the visual assembly map and a print list table.
-12. **Assembly map** — Go to *File → Export Assembly Map (PNG)…* to export a standalone labeled top-down PNG of the layout.
-13. **CSV print list** — Go to *File → Export Print List (CSV)…* (Ctrl+Shift+E) to export a simple tile-count CSV.
-
----
-
-## Project Structure
-
-```text
-.
-├── main.py                  # Entry point, sets up OpenGL surface format
-├── launch.bat               # Windows launcher (venv + dependency bootstrap)
-├── launch.sh                # Linux / macOS launcher (venv + dependency bootstrap)
-├── requirements.txt
-├── models/
-│   ├── tile_definition.py   # TileDefinition dataclass (name, size, mesh data)
-│   ├── placed_tile.py       # PlacedTile (definition + grid position + rotation)
-│   └── grid_model.py        # Grid state: placement, collision, counts
-├── stl_loader/
-│   ├── loader.py            # STL parsing, bounding-box sizing, voxel decimation
-│   └── worker.py            # Background thread for loading STL folders
-├── gui/
-│   ├── main_window.py           # QMainWindow shell, wires palette ↔ grid view
-│   ├── gl_grid_view.py          # QOpenGLWidget: 3D scene, ray-casting, instanced rendering
-│   ├── camera_controller.py     # Orbit camera state and input handling
-│   ├── ground_image_worker.py   # Background thread for loading battle map images
-│   ├── tile_preview_widget.py   # QOpenGLWidget: isolated 3D preview of selected tile
-│   ├── palette_panel.py         # Left panel: folder tabs, tile list, preview, export
-│   ├── missing_folders_dialog.py # Dialog shown when project references missing STL folders
-│   ├── style.py                 # Qt stylesheets (light and dark themes)
-│   └── icons/
-│       ├── app_icon.py          # Programmatic application icon (QPainter)
-│       └── app_icon.svg         # SVG source for the application icon
-├── export/
-│   ├── csv_exporter.py      # CSV print-list export
-│   └── assembly_map.py      # 2D assembly map PNG + PDF build plan
-└── persistence/
-    ├── project.py           # Save/load .mtp project files
-    └── settings.py          # Persistent app settings (window size, theme, etc.)
-```
-
----
-
-## Logs
-
-Warnings and errors are written to:
-
-| Platform | Path                                             |
-|----------|--------------------------------------------------|
-| Windows  | `%USERPROFILE%\.modular-terrain-planner\app.log` |
-| Linux    | `~/.modular-terrain-planner/app.log`             |
-| macOS    | `~/.modular-terrain-planner/app.log`             |
-
-This file is created automatically on first launch and is useful for diagnosing STL load failures or OpenGL errors when running as the portable EXE (where no console is available).
-
----
-
-## Documentation
-
-- [Mesh Processing & LOD](docs/mesh-processing.md) — how STL files are decimated into LOD tiers and how screen-coverage LOD selection works
-
----
+[How it works](docs/how-it-works.md) explains loading, the placement rules and drawing. [The project format](docs/project-format.md) describes `.mtp` files, and [Contributing](CONTRIBUTING.md) the branch and pull request routine.
 
 ## License
 
-MIT
+[MIT](LICENSE). The build plan font, Cantarell, is under the [SIL Open Font License](assets/fonts/OFL.txt).
