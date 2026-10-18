@@ -406,6 +406,18 @@ impl App {
         }
     }
 
+    fn clear_battle_map(&mut self) {
+        self.editor.doc.set_ground_image(None, false);
+        self.editor.changed();
+        self.renderer.set_ground_image(None);
+        self.image_shown = None;
+    }
+
+    fn ask_grid_size(&mut self) {
+        let g = self.editor.doc.grid();
+        self.dialog = Some(Dialog::GridSize { cols: g.cols, rows: g.rows, from_left: false });
+    }
+
     /// Loads the document's battle map into the renderer (or clears it).
     fn load_ground_image(&mut self) {
         self.image_shown = self.editor.doc.ground_image().map(|i| i.path.clone());
@@ -564,16 +576,9 @@ impl App {
                     self.editor.selection.clear();
                 }
             }
-            Command::GridSize => {
-                let g = self.editor.doc.grid();
-                self.dialog = Some(Dialog::GridSize { cols: g.cols, rows: g.rows, from_left: false });
-            }
+            Command::GridSize => self.ask_grid_size(),
             Command::SetBattleMap => self.set_battle_map(),
-            Command::ClearBattleMap => {
-                self.editor.doc.set_ground_image(None, false);
-                self.editor.changed();
-                self.renderer.set_ground_image(None);
-            }
+            Command::ClearBattleMap => self.clear_battle_map(),
             Command::Toggle3d => self.viewport.toggle_projection(),
             Command::Frame => self.viewport.frame(&self.editor),
             Command::ResetView => {
@@ -1429,15 +1434,8 @@ impl App {
                     }
                 }
                 Request::SetBattleMap => self.set_battle_map(),
-                Request::ClearBattleMap => {
-                    self.editor.doc.set_ground_image(None, false);
-                    self.editor.changed();
-                    self.renderer.set_ground_image(None);
-                }
-                Request::GridSize => {
-                    let g = self.editor.doc.grid();
-                    self.dialog = Some(Dialog::GridSize { cols: g.cols, rows: g.rows, from_left: false });
-                }
+                Request::ClearBattleMap => self.clear_battle_map(),
+                Request::GridSize => self.ask_grid_size(),
                 Request::UseStamp(i) => {
                     if let Some(s) = self.stamps.list.get(i) {
                         self.editor.clipboard = Some(s.tiles.clone());

@@ -163,7 +163,8 @@ impl Library {
         self.folders.iter().find(|f| TileKey::new(&f.path) == key).map(|f| f.id)
     }
 
-    /// Starts loading a folder (again, if it's already open).
+    /// Starts loading a folder. One that is already open is kept as it is,
+    /// unless it wasn't found or its subfolders are now wanted too.
     pub fn add_folder(&mut self, path: &Path, recursive: bool) -> FolderId {
         // Relative folders (from the command line) would be saved relative to
         // the wrong place
@@ -172,8 +173,12 @@ impl Library {
         let path_str = TileKey::from_path(path).as_str().to_owned();
         if let Some(id) = self.find_folder(&path_str) {
             let unavailable = matches!(self.folder(id).map(|f| &f.status), Some(FolderStatus::Unavailable(_)));
-            if !unavailable {
+            let adds_subfolders = recursive && self.folder(id).is_some_and(|f| !f.recursive);
+            if !unavailable && !adds_subfolders {
                 return id;
+            }
+            if !unavailable {
+                return self.reload_with_subfolders(id, path);
             }
             self.remove_folder(id);
         }
@@ -191,9 +196,37 @@ impl Library {
             skipped: Vec::new(),
             cancel: cancel.clone(),
         });
+        self.start_loading(id, path.to_path_buf(), recursive, cancel);
+        id
+    }
 
-        let (tx, cache, repaint, dir) = (self.tx.clone(), self.cache.clone(), self.repaint.clone(), path.to_path_buf());
-        let spawned = std::thread::Builder::new().name(format!("load {}", dir.display())).spawn(move || {
+    /// Loads an open folder again, now with its subfolders, in its place. It
+    /// gets a new id so whatever the old load still sends is ignored, and its
+    /// tiles stay in the library while the new load runs.
+    fn reload_with_subfolders(&mut self, id: FolderId, dir: &Path) -> FolderId {
+        let new_id = FolderId(self.next_id);
+        self.next_id += 1;
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Some(f) = self.folders.iter_mut().find(|f| f.id == id) {
+            f.cancel.store(true, Ordering::Relaxed);
+            f.id = new_id;
+            f.recursive = true;
+            f.status = FolderStatus::Scanning;
+            f.skipped.clear();
+            f.cancel = cancel.clone();
+        }
+        for t in self.tiles.values_mut().filter(|t| t.folder == id) {
+            t.folder = new_id;
+        }
+        self.start_loading(new_id, dir.to_path_buf(), true, cancel);
+        new_id
+    }
+
+    /// Scans and loads a folder on its own thread, reporting through `poll`.
+    fn start_loading(&self, id: FolderId, dir: PathBuf, recursive: bool, cancel: Arc<AtomicBool>) {
+        let (tx, cache, repaint) = (self.tx.clone(), self.cache.clone(), self.repaint.clone());
+        let name = format!("load {}", dir.display());
+        let spawned = std::thread::Builder::new().name(name.clone()).spawn(move || {
             let send = |m: Msg| {
                 let _ = tx.send(m);
                 repaint();
@@ -215,9 +248,8 @@ impl Library {
             send(Msg::Finished { folder: id });
         });
         if let Err(e) = spawned {
-            tracing::error!("couldn't start loading {}: {e}", path.display());
+            tracing::error!("couldn't start the thread to {name}: {e}");
         }
-        id
     }
 
     /// Closes a folder; returns the keys of the tiles that left the library.
@@ -267,7 +299,6 @@ impl Library {
                     }
                     let key = TileKey::from_path(&tile.path);
                     let relative = key.as_str().get(f.path.len()..).unwrap_or("").trim_start_matches('/').to_owned();
-                    let file = key.file_name().to_owned();
                     let entry = Tile {
                         key: key.clone(),
                         name: tile.name.clone(),
@@ -276,9 +307,13 @@ impl Library {
                         size: tile.size,
                         unit: tile.unit,
                         volume_mm3: tile.volume_mm3,
-                        color: tile_color(&f.name, &file),
+                        // The folder the file is in, not the library folder, so
+                        // same-named files in two packs of one library differ
+                        color: tile_color(key.folder_name(), key.file_name()),
                         mesh: Arc::new(*tile),
-                        thumbnail: None,
+                        // A tile loaded again (overlapping folders) keeps its
+                        // thumbnail, which is then redrawn in place
+                        thumbnail: self.tiles.get(&key).and_then(|t| t.thumbnail),
                     };
                     if !f.tiles.contains(&key) {
                         f.tiles.push(key.clone());
@@ -340,5 +375,32 @@ mod tests {
         assert!(library.remove_folder(sub).is_empty(), "the bigger folder still lists it");
         let tile = library.tile(&shared[0]).expect("still in the library");
         assert_eq!(tile.folder, all);
+    }
+
+    fn wait_for(library: &mut Library) {
+        let start = std::time::Instant::now();
+        while library.progress().is_some() {
+            library.poll();
+            assert!(start.elapsed().as_secs() < 30, "loading took too long");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn asking_for_subfolders_loads_an_open_folder_again() {
+        let fixtures = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/stl/good"));
+        let mut library = Library::new(None, 0, Arc::new(|| {}));
+        library.add_folder(fixtures, false);
+        wait_for(&mut library);
+        let flat = library.folders()[0].tiles.len();
+        library.add_folder(fixtures, false);
+        assert_eq!(library.folders()[0].status, FolderStatus::Ready, "asked the same way: kept as it is");
+        library.add_folder(fixtures, true);
+        wait_for(&mut library);
+        assert_eq!(library.folders().len(), 1);
+        let folder = &library.folders()[0];
+        assert!(folder.recursive);
+        assert!(folder.tiles.len() > flat, "the subfolder's tiles are loaded too");
+        assert!(folder.tiles.iter().all(|k| library.tile(k).is_some_and(|t| t.folder == folder.id)));
     }
 }

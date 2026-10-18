@@ -7,7 +7,7 @@ use mtp_core::footprint::Rotation;
 use mtp_core::persist::write_atomic;
 use mtp_core::rules::Proposal;
 use mtp_core::tile::TileKey;
-use mtp_core::units::TileSize;
+use mtp_core::units::{MAX_CELLS, TileSize};
 use serde_json::{Value, json};
 
 use crate::editor::Clipboard;
@@ -38,9 +38,13 @@ fn tile_json(p: &Proposal) -> Value {
 fn tile_from(v: &Value) -> Option<Proposal> {
     let size = v.get("size")?;
     let num = |o: &Value, k: &str| o.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+    // The same limits as project files: a damaged size can't make an empty or huge tile
+    let cells = |k: &str| {
+        num(size, k).filter(|n| n.fract() == 0.0 && (1.0..=f64::from(MAX_CELLS)).contains(n)).map(|n| n as u32)
+    };
     Some(Proposal {
         key: TileKey::new(v.get("file")?.as_str()?),
-        size: TileSize { w: num(size, "w")? as u32, h: num(size, "h")? as u32, gz: num(size, "gz")? as f32 },
+        size: TileSize { w: cells("w")?, h: cells("h")?, gz: num(size, "gz").filter(|&gz| gz > 0.0)? as f32 },
         size_known: true,
         x: num(v, "x")? as f32,
         y: num(v, "y")? as f32,
@@ -146,5 +150,14 @@ mod tests {
         let mut again = again;
         again.remove(0).expect("save");
         assert_eq!(Stamps::load(dir.path()).0.list.len(), 1);
+    }
+
+    #[test]
+    fn damaged_sizes_are_left_out() {
+        let tile = |w: f64, gz: f64| json!({ "file": "a.stl", "x": 0, "y": 0, "size": { "w": w, "h": 1, "gz": gz } });
+        assert!(tile_from(&tile(2.0, 0.5)).is_some());
+        for (w, gz) in [(0.0, 0.5), (1e12, 0.5), (1.5, 0.5), (2.0, 0.0)] {
+            assert!(tile_from(&tile(w, gz)).is_none(), "w {w}, gz {gz}");
+        }
     }
 }

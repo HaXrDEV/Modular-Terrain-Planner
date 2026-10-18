@@ -118,33 +118,67 @@ pub fn arrange(
     let mut heights = vec![0.0; proposals.len()];
     for i in order {
         let p = &proposals[i];
-        let probe = p.clone().into_placed(PlacedId(u64::MAX), p.z);
-        let (across, deep) = probe.effective();
-        if !grid.contains(p.x, p.y, across, deep) {
-            return Err(Refusal::OutsideGrid);
-        }
-        // Each level is its own floor: tiles on other levels don't collide
-        let level = p.level;
-        let other_level = |i: usize| working[i].level != level;
-        let z = match height {
-            Height::Keep => p.z,
-            Height::Settle => {
-                let support = index.support(&working, probe.cells(), other_level);
-                if mode == Mode::Snap && !support.is_level() {
-                    return Err(Refusal::Uneven { low: support.low, high: support.high });
-                }
-                support.high
-            }
-        };
-        if mode == Mode::Snap && index.overlapping(&working, probe.cells(), z, z + p.size.gz, other_level).is_some() {
-            return Err(Refusal::Overlaps);
-        }
+        let z = settle(grid, &working, &index, p, mode, height)?;
         let placed = p.clone().into_placed(PlacedId(u64::MAX - i as u64), z);
         index.insert(working.len(), &placed);
         working.push(placed);
         heights[i] = z;
     }
     Ok(heights)
+}
+
+/// Like [`arrange`] with [`Height::Settle`], but for fills and lines: each
+/// proposal is checked in turn against the tiles and the proposals before it
+/// that fit, and one that doesn't fit is skipped (`None`) instead of
+/// refusing the lot.
+pub fn fit_each(grid: GridSize, tiles: &[Placed], proposals: &[Proposal], mode: Mode) -> Vec<Option<f32>> {
+    let mut working = tiles.to_vec();
+    let mut index = CellIndex::build(&working);
+    proposals
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let z = settle(grid, &working, &index, p, mode, Height::Settle).ok()?;
+            let placed = p.clone().into_placed(PlacedId(u64::MAX - i as u64), z);
+            index.insert(working.len(), &placed);
+            working.push(placed);
+            Some(z)
+        })
+        .collect()
+}
+
+/// The base height of one proposal among `working` (indexed by `index`), or
+/// why it can't go there.
+fn settle(
+    grid: GridSize,
+    working: &[Placed],
+    index: &CellIndex,
+    p: &Proposal,
+    mode: Mode,
+    height: Height,
+) -> Result<f32, Refusal> {
+    let probe = p.clone().into_placed(PlacedId(u64::MAX), p.z);
+    let (across, deep) = probe.effective();
+    if !grid.contains(p.x, p.y, across, deep) {
+        return Err(Refusal::OutsideGrid);
+    }
+    // Each level is its own floor: tiles on other levels don't collide
+    let level = p.level;
+    let other_level = |i: usize| working[i].level != level;
+    let z = match height {
+        Height::Keep => p.z,
+        Height::Settle => {
+            let support = index.support(working, probe.cells(), other_level);
+            if mode == Mode::Snap && !support.is_level() {
+                return Err(Refusal::Uneven { low: support.low, high: support.high });
+            }
+            support.high
+        }
+    };
+    if mode == Mode::Snap && index.overlapping(working, probe.cells(), z, z + p.size.gz, other_level).is_some() {
+        return Err(Refusal::Overlaps);
+    }
+    Ok(z)
 }
 
 #[cfg(test)]
@@ -234,6 +268,15 @@ mod tests {
         let ground = placed(1, proposal(0.0, 0.0, 2, 2, 0.5), 0.0);
         let upstairs = Proposal { level: 1, ..proposal(0.0, 0.0, 2, 2, 0.5) };
         assert_eq!(arrange(GRID, &[ground], &none(), &[upstairs], Mode::Snap, Height::Settle), Ok(vec![0.0]));
+    }
+
+    #[test]
+    fn fills_skip_what_does_not_fit_and_stack_on_what_does() {
+        let floor = placed(1, proposal(2.0, 0.0, 2, 1, 0.5), 0.0);
+        let row: Vec<Proposal> = (0..3).map(|i| proposal(2.0 * i as f32, 0.0, 2, 1, 0.5)).collect();
+        let outside = proposal(19.0, 0.0, 2, 1, 0.5);
+        let z = fit_each(GRID, &[floor], &[row[0].clone(), row[1].clone(), outside, row[0].clone()], Mode::Snap);
+        assert_eq!(z, [Some(0.0), Some(0.5), None, Some(0.5)], "the repeat stacks on the first one placed");
     }
 
     #[test]

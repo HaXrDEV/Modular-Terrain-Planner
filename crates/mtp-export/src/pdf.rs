@@ -3,6 +3,7 @@
 //! the placements table. Everything is vector, text is real text in the
 //! bundled font.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use krilla::page::PageSettings;
 use krilla::paint::{Fill, Stroke, StrokeDash};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use krilla::{Document, SerializeSettings};
+use mtp_core::tile::{Placed, PlacedId, TileKey};
 
 use crate::draw::{self, Canvas, INK, MUTED, MapView, RULE, Rgb, WHITE};
 use crate::map_layout::{CellBounds, MapLayout, format_mm, map_layout};
@@ -452,11 +454,13 @@ fn placements_table(face: &Typeface, input: &ExportInput, width: f32) -> Table {
         Column { title: "Level", width: 0.8, right: true },
     ];
     let rows = print_list(input);
+    let rows_by_key: HashMap<&TileKey, &PrintRow> = rows.iter().map(|r| (&r.key, r)).collect();
+    let tiles_by_id: HashMap<PlacedId, &Placed> = input.tiles().map(|t| (t.id, t)).collect();
     let cells = placements(input)
         .into_iter()
         .filter_map(|(id, n)| {
-            let t = input.state.tiles.iter().find(|t| t.id == id)?;
-            let row = rows.iter().find(|r| r.key == t.key);
+            let t = tiles_by_id.get(&id)?;
+            let row = rows_by_key.get(&t.key);
             let meta = input.info.meta(&t.key);
             Some(vec![
                 format!("#{n}"),
@@ -480,13 +484,11 @@ fn placements_table(face: &Typeface, input: &ExportInput, width: f32) -> Table {
     table
 }
 
+/// A position to two decimals at most, without trailing zeros or point.
 fn format_cells(v: f32) -> String {
-    if v.fract() == 0.0 {
-        format!("{v:.0}")
-    } else {
-        let s = format!("{v:.2}");
-        s.trim_end_matches('0').to_string()
-    }
+    let s = format!("{v:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".to_owned() } else { s.to_owned() }
 }
 
 /// Splits a table into pages, repeating the header on each.
@@ -666,6 +668,14 @@ mod tests {
     use super::*;
     use crate::DefaultInfo;
     use crate::testutil::{state, tile};
+
+    #[test]
+    fn positions_drop_trailing_zeros_and_points() {
+        let cases = [(3.0, "3"), (3.5, "3.5"), (3.25, "3.25"), (2.999, "3"), (-0.001, "0"), (-1.5, "-1.5")];
+        for (v, text) in cases {
+            assert_eq!(format_cells(v), text, "{v}");
+        }
+    }
 
     fn render(s: &mtp_core::document::DocState, paper: Paper) -> lopdf::Document {
         let input = ExportInput { title: "Crypt of the Lich".into(), state: s, info: &DefaultInfo, level: None };
