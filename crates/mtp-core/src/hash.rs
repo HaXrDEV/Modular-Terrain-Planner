@@ -1,14 +1,16 @@
-//! FNV-1a, 64 bit. Cache keys must be the same on every run, so the standard
-//! library's randomly seeded hasher can't be used for them. It's also quicker
-//! than SipHash for welding vertices.
+//! FNV-1a, 64 bit: tiny, and the same on every platform, run and Rust
+//! version. Tile colours, mesh cache keys and the single-instance socket
+//! name must not change between launches, so the standard library's randomly
+//! seeded hasher can't be used for them. It's also quicker than SipHash for
+//! welding vertices.
 
 use std::hash::Hasher;
 
 const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;
 
-#[derive(Clone, Copy)]
-pub(crate) struct Fnv1a(u64);
+#[derive(Clone, Copy, Debug)]
+pub struct Fnv1a(u64);
 
 impl Default for Fnv1a {
     fn default() -> Self {
@@ -29,7 +31,7 @@ impl Hasher for Fnv1a {
     }
 }
 
-pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
+pub fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h = Fnv1a::default();
     h.write(bytes);
     h.finish()

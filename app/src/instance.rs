@@ -34,7 +34,7 @@ fn socket_name(scope: &str) -> std::io::Result<Name<'static>> {
     // One per user, and per --portable folder
     let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
     let key = format!("{user}|{scope}");
-    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    let hash = mtp_core::hash::fnv1a(key.as_bytes());
     let base = format!("modular-terrain-planner-{hash:016x}.sock");
     if GenericNamespaced::is_supported() {
         base.to_ns_name::<GenericNamespaced>().map(|n| n.into_owned())

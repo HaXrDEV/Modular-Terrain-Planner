@@ -1,9 +1,6 @@
 //! Tile colours that stay the same between launches and exports.
 
-/// FNV-1a, 64-bit: tiny, stable across platforms and Rust versions.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3))
-}
+use crate::hash::fnv1a;
 
 /// sRGB colour for a tile, from its folder and file name. Same saturation and
 /// value as the Python version (HSV 180/255, 210/255), but the hue no longer

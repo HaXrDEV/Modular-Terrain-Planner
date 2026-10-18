@@ -9,7 +9,7 @@ use std::time::Instant;
 use mtp_core::document::{DocState, Document};
 use mtp_core::footprint::{self, Rect, Rotation, Turn};
 use mtp_core::grid::GridSize;
-use mtp_core::rules::{self, Height, Mode, Proposal, Refusal};
+use mtp_core::rules::{self, Mode, Proposal, Refusal};
 use mtp_core::tile::{Placed, PlacedId, TileKey};
 use mtp_core::units::TileSize;
 
@@ -228,22 +228,8 @@ impl Editor {
     /// ones before it, with the height each would get. For fills and
     /// lines, which skip what doesn't fit instead of refusing everything.
     pub fn fit(&self, proposals: &[Proposal], mode: Mode) -> Vec<(Proposal, Option<f32>)> {
-        let grid = self.doc.grid();
-        let mut accepted: Vec<Placed> = self.doc.tiles().to_vec();
-        let none = std::collections::HashSet::new();
-        proposals
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let z = rules::arrange(grid, &accepted, &none, std::slice::from_ref(p), mode, Height::Settle)
-                    .ok()
-                    .map(|z| z[0]);
-                if let Some(z) = z {
-                    accepted.push(p.clone().into_placed(PlacedId(u64::MAX - i as u64), z));
-                }
-                (p.clone(), z)
-            })
-            .collect()
+        let heights = rules::fit_each(self.doc.grid(), self.doc.tiles(), proposals, mode);
+        proposals.iter().cloned().zip(heights).collect()
     }
 
     /// Places every proposal that fits, as one undo step. Returns how many
