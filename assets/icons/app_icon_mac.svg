@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- app_icon.svg on Apple's icon grid: an 824 px square inside 1024 px with a soft shadow,
+       so it's the same size as other apps in the Dock -->
+  <image x="100" y="100" width="824" height="824" xlink:href="app_icon.svg" filter="url(#shadow)"/>
+</svg>

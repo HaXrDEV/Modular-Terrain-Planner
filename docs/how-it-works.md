@@ -10,7 +10,7 @@ the app know nothing about the UI.
 | `crates/mtp-render` | The wgpu renderer, the camera, picking and thumbnails. |
 | `crates/mtp-export` | The build plan PDF, the PNG map and the CSV print list. |
 | `app` | The window: panels, tools, menus, settings, file dialogs and logging. |
-| `tools/icons` | Renders the app icon from its SVG. |
+| `tools/icons` | Renders the app icon from its SVGs (large, small and macOS). |
 
 ## Loading a tile library
 

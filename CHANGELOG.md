@@ -41,6 +41,8 @@ saving writes format version 5, which earlier versions can't open.
 - One window: opening a project from the file manager, or starting the
   app again, hands it to the window already open.
 - Installers for Windows, macOS (universal) and Linux (AppImage and tar.gz).
+- A new app icon that reads on light and dark taskbars, drawn separately
+  for small sizes and sized to match other apps in the macOS Dock.
 
 ### Fixed
 
