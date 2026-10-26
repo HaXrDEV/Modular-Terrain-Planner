@@ -40,8 +40,8 @@ instead, and `MTP_SOFTWARE_GPU=1` to use a software one.
 
 1. A pull request "Release X.Y.Z" sets the version in `Cargo.toml` and
    `CHANGELOG.md`.
-2. Once it's merged, tag `vX.Y.Z` on `main`. A `-rc1` suffix makes a
-   prerelease.
+2. Once it's merged, tag `vX.Y.Z` on `main`. A patch of 0 can be left off,
+   so `v0.5` releases 0.5.0. A `-rc1` suffix makes a prerelease.
 3. The release workflow checks the tag against `Cargo.toml`, reruns every
    check, builds and self-tests each download, and publishes them together
    with checksums. If any build fails, nothing is published.

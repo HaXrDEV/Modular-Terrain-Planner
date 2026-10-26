@@ -1,9 +1,10 @@
 name: Release
 
 # Push a tag vX.Y.Z (the version in Cargo.toml) on main to build, check and
-# publish every platform's download. vX.Y.Z-rc1 and the like publish a
-# prerelease. Nothing is published unless every build passes, and every
-# build runs its own self-test first.
+# publish every platform's download. A patch of 0 can be left off, so v0.5
+# releases 0.5.0. vX.Y.Z-rc1 and the like publish a prerelease. Nothing is
+# published unless every build passes, and every build runs its own
+# self-test first.
 
 on:
   push:
@@ -35,12 +36,17 @@ jobs:
         run: |
           crate=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
           tag="${GITHUB_REF_NAME#v}"
-          if [ "${tag%%-*}" != "$crate" ]; then
+          release="${tag%%-*}"
+          case "$release" in
+            *.*.*) ;;
+            *.*) release="$release.0" ;;
+          esac
+          if [ "$release" != "$crate" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match the version in Cargo.toml ($crate)"
             exit 1
           fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
-          if [ "$tag" = "$crate" ]; then echo "prerelease=false"; else echo "prerelease=true"; fi >> "$GITHUB_OUTPUT"
+          if [ "$tag" = "${tag%%-*}" ]; then echo "prerelease=false"; else echo "prerelease=true"; fi >> "$GITHUB_OUTPUT"
 
   build:
     needs: [checks, version]
