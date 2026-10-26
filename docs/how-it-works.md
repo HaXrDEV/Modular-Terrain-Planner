@@ -5,7 +5,7 @@ the app know nothing about the UI.
 
 | Crate | Owns |
 | :--- | :--- |
-| `crates/mtp-core` | Units, footprints and turning, the cell index, the placement rule, undo history, the document, `.mtp` files and atomic saves. No GPU or UI code. |
+| `crates/mtp-core` | Units, footprints and turning, the cell index, the placement rule, undo history, the document, `.mtp` files (a ZIP container with the project's STL files) and atomic saves. No GPU or UI code. |
 | `crates/mtp-stl` | Reading STL files, sizing tiles, simplified levels of detail, the mesh cache and folder scanning. |
 | `crates/mtp-render` | The wgpu renderer, the camera, picking and thumbnails. |
 | `crates/mtp-export` | The build plan PDF, the PNG map and the CSV print list. |
@@ -37,6 +37,18 @@ For one file:
 5. **Cache.** The result is stored in the mesh cache, keyed by path, size,
    modification time and loader version, so the next start skips 1 to 4.
 
+An open project's own STL files are listed under In this project. A file on
+disk wins; the copy inside the project is only loaded, from the project
+file, when the file isn't there. Those copies are cached by their contents,
+so one STL file in several projects is prepared once. Files on disk are
+compared with their copies (size, then CRC32) when the project opens, and
+the app asks which to use for those that differ. Choosing the project's
+copies pins them: they load from the project, loading their folder again
+doesn't replace them, and saving keeps them. Add to the library, on that
+section, writes the files that aren't on this computer to
+`<project> tiles/<pack>/<file>` in a folder of your choice, adds it to the
+library and points the layout's tiles at them, as one undo step.
+
 ## Placing tiles
 
 Every edit (placing, painting, moving, pasting, turning, replacing) asks one
@@ -63,6 +75,17 @@ The history keeps whole document states (shared, so a step costs one copy of
 the tile list) with a mark for the saved state, so undoing back to it clears
 the unsaved star. When a tile's STL loads after a project was opened, its real
 size is written into every undo step, so undo can't bring back the guess.
+
+## Saving
+
+A save is planned on the UI thread (the project file, and where each STL
+file inside it comes from) and written on a worker thread, with progress in
+the status bar. An STL file is copied across from the project being replaced
+as it is stored there, without unpacking and packing it again, when the file
+on disk has the same size and CRC32 or isn't on this computer. So saving
+again only packs what changed. The saved mark goes on the state the save
+started from, so edits made while it's written stay unsaved. One save runs
+at a time: quitting waits for it and autosave skips its turn.
 
 ## Drawing
 

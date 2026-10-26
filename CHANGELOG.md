@@ -2,6 +2,29 @@
 
 Release notes on GitHub list every pull request. This is the short version.
 
+## 0.6.0 (unreleased)
+
+Saving writes format version 6, which 0.5 can't open. Every older project
+still opens.
+
+### New
+
+- Projects carry the STL files their tiles use and the battle map, like
+  a PSD carries its layers, so a project opens complete on another
+  computer. The library lists them under In this project, and File >
+  Export STL files writes them out for printing.
+- Saving runs in the background, and saving again only packs the STL
+  files that changed, so it's quick. Identical files are stored once.
+- Opening a project whose STL files changed on this computer asks
+  whether to use the project's copies or the files on disk.
+- Add to the library, under In this project, unpacks the project's STL
+  files that aren't on this computer into a folder in the library.
+- Export STL files can write only what's left to print, with the counts
+  in the file names, and puts Print list.csv beside them.
+- STL files a save couldn't carry, being neither on this computer nor in
+  the project, are listed in Problems with Locate… to point their tiles
+  at another file.
+
 ## 0.5.0 (unreleased)
 
 The app is rebuilt in Rust. Projects from earlier versions open as they are;

@@ -15,6 +15,28 @@ use crate::library::{FolderId, FolderStatus, Library};
 #[derive(Clone, Debug)]
 pub struct Problem {
     pub text: String,
+    /// An STL file the last save couldn't put inside the project, which a
+    /// Locate… button can point at another file.
+    pub missing: Option<TileKey>,
+}
+
+impl Problem {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), missing: None }
+    }
+}
+
+/// Lists the STL files a save couldn't carry, replacing the previous
+/// save's list and leaving other problems be.
+pub fn set_missing(problems: &mut Vec<Problem>, keys: &[TileKey]) {
+    problems.retain(|p| p.missing.is_none());
+    problems.extend(keys.iter().map(|key| Problem {
+        text: format!(
+            "{} isn't on this computer or inside the project, so its tiles were saved without it.",
+            key.as_str()
+        ),
+        missing: Some(key.clone()),
+    }));
 }
 
 #[derive(Default)]
@@ -28,7 +50,9 @@ pub struct LibraryPanel {
 /// Requests from the panels that the app carries out.
 #[derive(Debug, PartialEq)]
 pub enum Request {
-    AddFolder { recursive: bool },
+    AddFolder {
+        recursive: bool,
+    },
     RemoveFolder(FolderId),
     ReloadFolder(FolderId),
     SetBattleMap,
@@ -37,6 +61,11 @@ pub enum Request {
     SampleTiles,
     UseStamp(usize),
     DeleteStamp(usize),
+    /// Point the tiles using a missing STL file at another file.
+    Locate(TileKey),
+    /// Write the project's STL files that aren't on this computer to a
+    /// folder and add it to the library.
+    AddProjectTiles,
 }
 
 pub fn size_text(size: TileSize) -> String {
@@ -160,6 +189,7 @@ impl LibraryPanel {
             for folder in library.folders() {
                 let open = !self.collapsed.contains(&folder.id);
                 let header = match &folder.status {
+                    _ if folder.embedded && folder.tiles.is_empty() => continue,
                     FolderStatus::Scanning => format!("{} (looking…)", folder.name),
                     FolderStatus::Loading { done, total } => format!("{} ({done} of {total})", folder.name),
                     FolderStatus::Ready => format!("{} ({})", folder.name, folder.tiles.len()),
@@ -178,6 +208,28 @@ impl LibraryPanel {
                             }
                         });
                         return;
+                    }
+                    if folder.embedded {
+                        let missing = library.embedded_missing();
+                        let used: BTreeSet<&str> = editor
+                            .doc
+                            .tiles()
+                            .iter()
+                            .filter(|t| missing.contains(&t.key))
+                            .map(|t| t.key.as_str())
+                            .collect();
+                        if !used.is_empty()
+                            && ui
+                                .button("Add to the library…")
+                                .on_hover_text(format!(
+                                    "{} of these STL files aren't on this computer. Writes them to a folder you \
+                                     choose and adds it to the library.",
+                                    used.len()
+                                ))
+                                .clicked()
+                        {
+                            requests.push(Request::AddProjectTiles);
+                        }
                     }
                     if !folder.skipped.is_empty() {
                         ui.label(
@@ -229,6 +281,12 @@ impl LibraryPanel {
                     } else {
                         self.collapsed.remove(&folder.id);
                     }
+                }
+                if folder.embedded {
+                    resp.header_response.on_hover_text(
+                        "The STL files saved inside this project. A file on this computer is used when it's there.",
+                    );
+                    continue;
                 }
                 resp.header_response.context_menu(|ui| {
                     if ui.button("Load again").clicked() {
@@ -544,19 +602,43 @@ pub fn print_list(
     problems
 }
 
-pub fn problems(ui: &mut egui::Ui, problems: &mut Vec<Problem>) {
+pub fn problems(ui: &mut egui::Ui, problems: &mut Vec<Problem>) -> Vec<Request> {
+    let mut requests = Vec::new();
     if problems.is_empty() {
         ui.label(RichText::new("No problems.").weak());
-        return;
+        return requests;
     }
     if ui.button("Clear").clicked() {
         problems.clear();
-        return;
+        return requests;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for p in problems.iter().rev() {
             ui.label(&p.text);
+            if let Some(key) = &p.missing
+                && ui.button("Locate…").on_hover_text("Choose the file its tiles should use").clicked()
+            {
+                requests.push(Request::Locate(key.clone()));
+            }
             ui.separator();
         }
     });
+    requests
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_replaces_the_list_of_missing_files() {
+        let (a, b) = (TileKey::new("C:/Gone/a.stl"), TileKey::new("C:/Gone/b.stl"));
+        let mut problems = vec![Problem::new("A folder wasn't found.")];
+        set_missing(&mut problems, &[a.clone(), b]);
+        assert_eq!(problems.len(), 3);
+        set_missing(&mut problems, std::slice::from_ref(&a));
+        let missing: Vec<_> = problems.iter().filter_map(|p| p.missing.as_ref()).collect();
+        assert_eq!(missing, [&a]);
+        assert_eq!(problems[0].text, "A folder wasn't found.", "other problems stay");
+    }
 }

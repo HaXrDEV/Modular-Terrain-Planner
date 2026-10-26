@@ -14,6 +14,10 @@
 //! - each tile's size, so tiles whose STL is missing keep their footprint and
 //!   are written back unchanged;
 //! - a `level` per tile (0 unless set).
+//!
+//! Version 6 is the same JSON inside a ZIP container with the STL files the
+//! tiles use, plus an `embedded` table pointing each file at its entry (see
+//! [`crate::container`]).
 
 use std::fmt::Write as _;
 
@@ -26,9 +30,9 @@ use crate::tile::{Placed, PlacedId, TileKey};
 use crate::units::TileSize;
 
 /// The version this app writes.
-pub const FORMAT_VERSION: u64 = 5;
+pub const FORMAT_VERSION: u64 = 6;
 /// Files can say they need at least this reader; ours reads up to [`FORMAT_VERSION`].
-pub const MIN_READER_VERSION: u64 = 5;
+pub const MIN_READER_VERSION: u64 = 6;
 /// The default extension, without the dot.
 pub const EXTENSION: &str = "mtp";
 
@@ -62,6 +66,18 @@ pub struct ImageRecord {
     pub path: String,
     pub absolute: Option<String>,
     pub rect: [f32; 4],
+    /// Its copy inside the project (format 6), `images/<name>`.
+    pub entry: Option<String>,
+}
+
+/// An STL file carried inside the project (format 6).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbeddedRecord {
+    /// The folder and file a tile names it by, as in [`TileRecord`].
+    pub folder: usize,
+    pub file: String,
+    /// Its entry in the container.
+    pub entry: String,
 }
 
 /// The contents of a project file, before its folders are looked for on disk.
@@ -74,12 +90,18 @@ pub struct ProjectFile {
     pub folders: Vec<FolderRecord>,
     pub tiles: Vec<TileRecord>,
     pub ground_image: Option<ImageRecord>,
+    /// STL files carried inside the project, one per file the tiles use.
+    pub embedded: Vec<EmbeddedRecord>,
     /// Problems found while reading, for the Problems panel.
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ProjectError {
+    #[error("the file can't be read ({0})")]
+    Unreadable(String),
+    #[error("this project file is damaged ({0})")]
+    Damaged(String),
     #[error("this isn't a project file (it isn't valid JSON: {0})")]
     NotJson(String),
     #[error("this isn't a project file (it doesn't hold a project)")]
@@ -168,6 +190,7 @@ fn read_image(v: Option<&Value>, warnings: &mut Vec<String>) -> Option<ImageReco
     let obj = v?.as_object()?;
     let path = obj.get("path")?.as_str()?.to_owned();
     let absolute = obj.get("absolute").and_then(Value::as_str).map(str::to_owned);
+    let entry = obj.get("entry").and_then(Value::as_str).filter(|e| e.starts_with("images/")).map(str::to_owned);
     let rect: Vec<f32> = obj
         .get("rect")
         .and_then(Value::as_array)
@@ -176,9 +199,9 @@ fn read_image(v: Option<&Value>, warnings: &mut Vec<String>) -> Option<ImageReco
     if rect.len() != 4 || rect[2] <= 0.0 || rect[3] <= 0.0 {
         // A zero size tells the app to fit the image to the grid again
         warnings.push(format!("The battle map {path} had no usable size; it is placed to fill the grid."));
-        return Some(ImageRecord { path, absolute, rect: [0.0; 4] });
+        return Some(ImageRecord { path, absolute, rect: [0.0; 4], entry });
     }
-    Some(ImageRecord { path, absolute, rect: [rect[0], rect[1], rect[2], rect[3]] })
+    Some(ImageRecord { path, absolute, rect: [rect[0], rect[1], rect[2], rect[3]], entry })
 }
 
 /// The Python app's files, with its migrations: v1 had no grid size (40 × 40),
@@ -250,6 +273,7 @@ fn read_v1_to_v4(root: &Map<String, Value>, warnings: &mut Vec<String>) -> Proje
         folders,
         tiles,
         ground_image: read_image(root.get("ground_image"), warnings),
+        embedded: Vec::new(),
         warnings: Vec::new(),
     }
 }
@@ -303,6 +327,20 @@ fn read_v5(root: &Map<String, Value>, warnings: &mut Vec<String>) -> ProjectFile
         });
     }
 
+    let mut embedded = Vec::new();
+    for e in root.get("embedded").and_then(Value::as_array).into_iter().flatten() {
+        let folder = e.get("folder").and_then(Value::as_u64).map(|f| f as usize).filter(|&f| f < folders.len());
+        let file = e.get("file").and_then(Value::as_str).filter(|f| !f.is_empty());
+        // Only STL entries: the project's own JSON is never an STL file
+        let entry = e.get("entry").and_then(Value::as_str).filter(|s| s.starts_with("stl/"));
+        match (folder, file, entry) {
+            (Some(folder), Some(file), Some(entry)) => {
+                embedded.push(EmbeddedRecord { folder, file: file.to_owned(), entry: entry.to_owned() });
+            }
+            _ => warnings.push(format!("An embedded STL file had an unreadable record ({e}) and was left out.")),
+        }
+    }
+
     ProjectFile {
         version: 0,
         app_version: root.get("app_version").and_then(Value::as_str).map(str::to_owned),
@@ -310,11 +348,13 @@ fn read_v5(root: &Map<String, Value>, warnings: &mut Vec<String>) -> ProjectFile
         folders,
         tiles,
         ground_image: read_image(root.get("ground_image"), warnings),
+        embedded,
         warnings: Vec::new(),
     }
 }
 
-/// Writes the newest format as pretty JSON.
+/// Writes the newest format's JSON, pretty printed. A format 6 file is this
+/// inside a container; see [`crate::container::write`].
 pub fn write(file: &ProjectFile, app_version: &str) -> String {
     let folders: Vec<Value> = file
         .folders
@@ -365,7 +405,15 @@ pub fn write(file: &ProjectFile, app_version: &str) -> String {
         if let Some(abs) = &img.absolute {
             o["absolute"] = json!(abs);
         }
+        if let Some(entry) = &img.entry {
+            o["entry"] = json!(entry);
+        }
         root["ground_image"] = o;
+    }
+    if !file.embedded.is_empty() {
+        let embedded: Vec<Value> =
+            file.embedded.iter().map(|e| json!({ "folder": e.folder, "file": e.file, "entry": e.entry })).collect();
+        root["embedded"] = json!(embedded);
     }
     let mut out = serde_json::to_string_pretty(&root).unwrap_or_default();
     let _ = writeln!(out);
@@ -440,23 +488,42 @@ pub fn locate(project_dir: &str, folder: &FolderRecord, exists: impl Fn(&str) ->
     candidates.into_iter().find(|c| exists(c))
 }
 
+/// Where each folder is: found now, or else where it was saved.
+fn folder_locations(file: &ProjectFile, project_dir: &str, found: &[Option<String>]) -> Vec<String> {
+    file.folders
+        .iter()
+        .enumerate()
+        .map(|(i, f)| found.get(i).cloned().flatten().unwrap_or_else(|| saved_location(project_dir, f)))
+        .collect()
+}
+
+fn key_in(folder: &str, file: &str) -> TileKey {
+    TileKey::new(&format!("{}/{}", folder.trim_end_matches('/'), file))
+}
+
+/// The tile key each embedded STL file stands in for, worked out exactly
+/// as [`to_state`] works out the tiles' keys.
+pub fn embedded_keys<'a>(
+    file: &'a ProjectFile,
+    project_dir: &str,
+    found: &[Option<String>],
+) -> Vec<(TileKey, &'a EmbeddedRecord)> {
+    let folder_paths = folder_locations(file, project_dir, found);
+    file.embedded.iter().map(|e| (key_in(&folder_paths[e.folder], &e.file), e)).collect()
+}
+
 /// The document a project file describes. `found` holds, for each folder,
 /// where it is now (`None` keeps the saved location, so its tiles are saved
 /// again unchanged). Tiles keep every saved position, overlapping or not.
 pub fn to_state(file: &ProjectFile, project_dir: &str, found: &[Option<String>], image: Option<String>) -> DocState {
-    let folder_paths: Vec<String> = file
-        .folders
-        .iter()
-        .enumerate()
-        .map(|(i, f)| found.get(i).cloned().flatten().unwrap_or_else(|| saved_location(project_dir, f)))
-        .collect();
+    let folder_paths = folder_locations(file, project_dir, found);
     let tiles = file
         .tiles
         .iter()
         .enumerate()
         .map(|(i, t)| Placed {
             id: PlacedId(i as u64 + 1),
-            key: TileKey::new(&format!("{}/{}", folder_paths[t.folder].trim_end_matches('/'), t.file)),
+            key: key_in(&folder_paths[t.folder], &t.file),
             size: t.size.unwrap_or(TileSize::PLACEHOLDER),
             size_known: t.size.is_some(),
             x: t.x,
@@ -524,7 +591,9 @@ pub fn from_state(state: &DocState, open: &[LibraryFolder], project_dir: &str) -
             path: saved_path(&img.path),
             absolute: Some(TileKey::new(&img.path).as_str().to_owned()),
             rect: img.rect,
+            entry: None,
         }),
+        embedded: Vec::new(),
         warnings: Vec::new(),
     }
 }
@@ -564,7 +633,17 @@ mod tests {
                 level: 2,
                 size: Some(TileSize { w: 2, h: 1, gz: 4.064 }),
             }],
-            ground_image: Some(ImageRecord { path: "cave.png".into(), absolute: None, rect: [0.0, 0.0, 60.0, 40.0] }),
+            ground_image: Some(ImageRecord {
+                path: "cave.png".into(),
+                absolute: None,
+                rect: [0.0, 0.0, 60.0, 40.0],
+                entry: Some("images/cave.png".into()),
+            }),
+            embedded: vec![EmbeddedRecord {
+                folder: 0,
+                file: "walls/wall.stl".into(),
+                entry: "stl/Tiles/walls/wall.stl".into(),
+            }],
             warnings: Vec::new(),
         };
         let text = write(&file, "0.5.0");
@@ -573,9 +652,9 @@ mod tests {
 
     #[test]
     fn newer_files_open_when_they_allow_it() {
-        let ok = read(br#"{"version": 6, "min_reader_version": 5, "tiles": []}"#).expect("readable");
+        let ok = read(br#"{"version": 7, "min_reader_version": 6, "tiles": []}"#).expect("readable");
         assert_eq!(ok.warnings.len(), 1);
-        assert_eq!(read(br#"{"version": 6, "min_reader_version": 6}"#), Err(ProjectError::TooNew { version: 6 }));
+        assert_eq!(read(br#"{"version": 7, "min_reader_version": 7}"#), Err(ProjectError::TooNew { version: 7 }));
     }
 
     #[test]

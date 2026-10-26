@@ -15,7 +15,14 @@ struct Entry<T> {
     /// What the step did, e.g. "Place tile", for Undo/Redo menu items.
     label: String,
     state: Arc<T>,
+    /// Tells this state apart from every other, for [`SaveToken`].
+    serial: u64,
 }
+
+/// Names the state a save started from, so the saved mark goes on that state
+/// even when edits were made while it was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveToken(u64);
 
 #[derive(Debug)]
 pub struct History<T> {
@@ -23,16 +30,18 @@ pub struct History<T> {
     cursor: usize,
     saved: Option<usize>,
     limit: usize,
+    next_serial: u64,
 }
 
 impl<T> History<T> {
     /// A history whose only state is `initial`, marked as saved.
     pub fn new(initial: Arc<T>) -> Self {
         Self {
-            entries: vec![Entry { label: String::new(), state: initial }],
+            entries: vec![Entry { label: String::new(), state: initial, serial: 0 }],
             cursor: 0,
             saved: Some(0),
             limit: UNDO_LIMIT,
+            next_serial: 1,
         }
     }
 
@@ -51,7 +60,8 @@ impl<T> History<T> {
         if self.saved.is_some_and(|s| s > self.cursor) {
             self.saved = None;
         }
-        self.entries.push(Entry { label: label.into(), state });
+        let serial = self.serial();
+        self.entries.push(Entry { label: label.into(), state, serial });
         self.cursor += 1;
         while self.entries.len() > self.limit + 1 {
             self.entries.remove(0);
@@ -65,7 +75,9 @@ impl<T> History<T> {
     pub fn push_or_merge(&mut self, label: &str, state: Arc<T>) {
         let top = self.cursor == self.entries.len() - 1;
         if top && self.cursor > 0 && self.entries[self.cursor].label == label && self.saved != Some(self.cursor) {
-            self.entries[self.cursor].state = state;
+            // A different state, so a save started from the one replaced doesn't mark it
+            let serial = self.serial();
+            self.entries[self.cursor] = Entry { label: label.to_owned(), state, serial };
         } else {
             self.push(label, state);
         }
@@ -99,6 +111,22 @@ impl<T> History<T> {
 
     pub fn mark_saved(&mut self) {
         self.saved = Some(self.cursor);
+    }
+
+    /// The current state, for a save about to start.
+    pub fn token(&self) -> SaveToken {
+        SaveToken(self.entries[self.cursor].serial)
+    }
+
+    /// Marks the state `token` names as saved, wherever it is now. If it
+    /// has left the history, no state is the saved one.
+    pub fn mark_saved_at(&mut self, token: SaveToken) {
+        self.saved = self.entries.iter().position(|e| e.serial == token.0);
+    }
+
+    fn serial(&mut self) -> u64 {
+        self.next_serial += 1;
+        self.next_serial - 1
     }
 
     /// Marks the current state as not saved anywhere (recovered work).
@@ -161,6 +189,35 @@ mod tests {
         }
         assert_eq!(undone, 3);
         assert_eq!(**h.current(), 7);
+    }
+
+    #[test]
+    fn a_save_marks_the_state_it_started_from() {
+        let mut h = history();
+        h.push("a", Arc::new(1));
+        let token = h.token();
+        // Edits made while the save is written stay unsaved
+        h.push("b", Arc::new(2));
+        h.mark_saved_at(token);
+        assert!(h.is_dirty());
+        h.undo();
+        assert!(!h.is_dirty(), "the saved state is the one the save started from");
+
+        // A slider dragged on during the save changes the state it started from
+        h.push_or_merge("Scale map", Arc::new(3));
+        let token = h.token();
+        h.push_or_merge("Scale map", Arc::new(4));
+        h.mark_saved_at(token);
+        assert!(h.is_dirty());
+
+        // A state that left the history (undone and replaced) can't be marked
+        h.undo();
+        let token = h.token();
+        h.undo();
+        h.push("c", Arc::new(5));
+        h.mark_saved_at(token);
+        assert!(h.is_dirty());
+        assert!(h.undo().is_some() && h.is_dirty());
     }
 
     #[test]

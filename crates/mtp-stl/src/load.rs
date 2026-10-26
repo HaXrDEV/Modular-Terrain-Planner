@@ -110,6 +110,28 @@ pub fn load_tile(path: &Path, cache: Option<&MeshCache>) -> Result<LoadedTile, L
     Ok(tile)
 }
 
+/// Loads a tile from bytes already in memory (an STL file inside a project)
+/// as if it were the file at `path`. Cached by content. A loader bug comes
+/// back as an error, as in [`load_many`].
+pub fn load_bytes(path: &Path, bytes: &[u8], cache: Option<&MeshCache>) -> Result<LoadedTile, LoadError> {
+    let fail = |kind: LoadErrorKind| LoadError { path: path.to_path_buf(), kind };
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        let key = cache.map(|c| (c, c.key_for_bytes(bytes)));
+        if let Some((c, k)) = key
+            && let Some(tile) = c.get_by_key(path, k)
+        {
+            return Ok(tile);
+        }
+        let triangles = parse_stl(bytes).map_err(|e| fail(e.into()))?;
+        let tile = LoadedTile::from_triangles(path, &triangles).map_err(|e| fail(e.into()))?;
+        if let Some((c, k)) = key {
+            let _ = c.put_with_key(&tile, k);
+        }
+        Ok(tile)
+    }))
+    .unwrap_or_else(|payload| Err(fail(LoadErrorKind::Panic(panic_message(payload.as_ref())))))
+}
+
 /// Loads `paths` in parallel, calling `on_result` with each file's index as
 /// it finishes. Every file that is started reports exactly one result. Once
 /// `cancel` is set no more files are started, and those files report nothing.

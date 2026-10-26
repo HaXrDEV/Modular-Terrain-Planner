@@ -23,6 +23,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tempfile = "3"
+# Format 6 projects are ZIP containers. zip leaves the deflate backend to us:
+# flate2's pure Rust one, already in the tree for the icon tool
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The CRC32 a ZIP stores per entry, for files on disk (zip only checks it on read)
+crc32fast = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
