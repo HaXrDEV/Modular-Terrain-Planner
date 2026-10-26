@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use mtp_core::hash::{Fnv1a, fnv1a};
 use mtp_core::units::{SourceUnit, TileSize};
 
-use crate::hash::{Fnv1a, fnv1a};
 use crate::load::{LOADER_VERSION, LoadedTile, tile_name};
 use crate::lod::MAX_TIERS;
 use crate::mesh::IndexedMesh;

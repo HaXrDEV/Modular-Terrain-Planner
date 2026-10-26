@@ -15,7 +15,6 @@
 //! the pipeline over them in parallel, one result per file.
 
 pub mod cache;
-mod hash;
 pub mod load;
 pub mod lod;
 pub mod mesh;

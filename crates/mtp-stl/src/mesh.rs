@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 
+use mtp_core::hash::Fnv1a;
 use mtp_core::units::{SourceUnit, TileSize};
 
-use crate::hash::Fnv1a;
 use crate::parse::Triangle;
 
 /// Triangles that share corners through an index buffer.
