@@ -19,7 +19,7 @@ eframe = { version = "=0.36.2", default-features = false, features = ["accesskit
 egui_dock = "=0.21.1"
 glam.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
-rfd = "0.17"
+rfd = "0.18"
 serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"

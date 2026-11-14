@@ -11,7 +11,7 @@ publish.workspace = true
 mtp-core.workspace = true
 bytemuck.workspace = true
 glam.workspace = true
-pollster = "0.4"
+pollster = "1.0"
 thiserror.workspace = true
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "dx12", "metal", "vulkan", "gles", "parking_lot"] }
 
