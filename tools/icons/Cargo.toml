@@ -10,7 +10,7 @@ publish.workspace = true
 [dependencies]
 icns = "0.5"
 ico = "0.6"
-resvg = "0.48"
+resvg = "0.49"
 
 [lints]
 workspace = true
